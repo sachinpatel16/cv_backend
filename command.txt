@@ -1,0 +1,14 @@
+# Create a new migration with autogenerate (based on changes in models)
+alembic revision --autogenerate -m "create auth model"
+
+# Apply all pending migrations to the database
+alembic upgrade head
+
+# Rollback the last migration
+alembic downgrade -1
+
+# Show migration history
+alembic history --verbose
+
+# Show current database migration status
+alembic current
