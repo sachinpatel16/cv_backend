@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     # Security Configuration
     SECRET_KEY: str = "super-secret-key-for-development-only-change-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: str = "lax"
     
     # Storage Configuration
     MINIO_ENDPOINT: str = "localhost:9000"
