@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError
@@ -11,11 +11,26 @@ from modules.users.model import User
 security_scheme = HTTPBearer()
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    """Extract and validate the access token from the Authorization header."""
-    token = credentials.credentials
+    """Extract and validate the access token from the cookie or Authorization header."""
+    # 1. Try to read from cookies
+    token = request.cookies.get("access_token")
+    
+    # 2. Fall back to checking Authorization header if not found in cookies
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
     try:
         payload = security.decode_token(token)
         token_type = payload.get("type")

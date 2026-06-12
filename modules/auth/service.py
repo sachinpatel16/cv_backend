@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Response
 from datetime import timedelta
 from jose import JWTError
 
@@ -14,7 +14,7 @@ class AuthService:
         self.repo = AuthRepository(db)
         self.db = db
 
-    async def register(self, data: RegisterRequest) -> StandardResponse:
+    async def register(self, response: Response, data: RegisterRequest) -> StandardResponse:
         """Register a new user. Organization creation is removed; only tenant_id (optional) is stored."""
         # 1. Check if email already registered
         existing_user = await self.repo.get_user_by_email(data.email)
@@ -44,6 +44,27 @@ class AuthService:
         }
         access_token = security.create_access_token(token_data)
         refresh_token = security.create_refresh_token(token_data)
+
+        # Set HTTP-only cookies
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/"
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=7 * 24 * 60 * 60,  # 7 days
+            path="/"
+        )
+
         user_info = TokenResponseUser(
             id=user.id,
             first_name=user.first_name,
@@ -55,15 +76,10 @@ class AuthService:
         return StandardResponse(
             message="Registration successful",
             status=status.HTTP_201_CREATED,
-            data=TokenResponse(
-                access_token=access_token,
-                refresh_token=refresh_token,
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                user=user_info,
-            ),
+            data=user_info,
         )
 
-    async def login(self, data: LoginRequest) -> StandardResponse:
+    async def login(self, response: Response, data: LoginRequest) -> StandardResponse:
         """Authenticate user credentials and return JWT tokens."""
         user = await self.repo.get_user_by_email(data.email)
         if not user or not security.verify_password(data.password, user.password):
@@ -93,6 +109,26 @@ class AuthService:
         access_token = security.create_access_token(token_data)
         refresh_token = security.create_refresh_token(token_data)
 
+        # Set HTTP-only cookies
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/"
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=7 * 24 * 60 * 60,  # 7 days
+            path="/"
+        )
+
         user_info = TokenResponseUser(
             id=user.id,
             first_name=user.first_name,
@@ -105,15 +141,10 @@ class AuthService:
         return StandardResponse(
             message="Login successful",
             status=status.HTTP_200_OK,
-            data=TokenResponse(
-                access_token=access_token,
-                refresh_token=refresh_token,
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                user=user_info
-            )
+            data=user_info
         )
 
-    async def refresh_tokens(self, refresh_token: str) -> StandardResponse:
+    async def refresh_tokens(self, response: Response, refresh_token: str) -> StandardResponse:
         """Issue new access and refresh tokens using a valid refresh token."""
         try:
             payload = security.decode_token(refresh_token)
@@ -157,6 +188,26 @@ class AuthService:
         new_access_token = security.create_access_token(token_data)
         new_refresh_token = security.create_refresh_token(token_data)
 
+        # Set HTTP-only cookies
+        response.set_cookie(
+            key="access_token",
+            value=new_access_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/"
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            httponly=True,
+            secure=settings.COOKIE_SECURE,
+            samesite=settings.COOKIE_SAMESITE,
+            max_age=7 * 24 * 60 * 60,  # 7 days
+            path="/"
+        )
+
         user_info = TokenResponseUser(
             id=user.id,
             first_name=user.first_name,
@@ -169,12 +220,7 @@ class AuthService:
         return StandardResponse(
             message="Token refreshed",
             status=status.HTTP_200_OK,
-            data=TokenResponse(
-                access_token=new_access_token,
-                refresh_token=new_refresh_token,
-                expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                user=user_info
-            )
+            data=user_info
         )
 
     async def change_password(self, user_id, data: ChangePasswordRequest) -> None:
