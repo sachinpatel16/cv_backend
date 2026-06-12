@@ -1,7 +1,11 @@
-# Create a new migration with autogenerate (based on changes in models)
-alembic revision --autogenerate -m "create auth model"
+# ==========================================
+# LOCAL MIGRATION COMMANDS (ALEMBIC)
+# ==========================================
 
-# Apply all pending migrations to the database
+# Create a new migration with autogenerate (based on changes in models)
+alembic revision --autogenerate -m "add_peoplefind_models"
+
+# Apply all pending migrations to the local database
 alembic upgrade head
 
 # Rollback the last migration
@@ -12,3 +16,35 @@ alembic history --verbose
 
 # Show current database migration status
 alembic current
+
+
+# ==========================================
+# DOCKER COMPOSE COMMANDS (STEP-BY-STEP)
+# ==========================================
+
+# 1. Build and start the entire stack in the background (Postgres, Redis, App, Worker)
+docker compose up -d --build
+
+# 2. Run the database migrations inside the running API container
+docker compose exec app alembic upgrade head
+
+# 3. Check status/logs of all running containers
+docker compose ps
+docker compose logs -f
+
+# 4. View logs for the background Celery worker container specifically
+docker compose logs -f worker
+
+# 5. Stop and remove the containers (keeps database volumes intact)
+docker compose down
+
+# 6. Stop and remove containers AND delete database data (for a clean restart)
+docker compose down -v
+
+# 7. Generate a new migration script inside the running container (run this if you modify models on the host)
+docker compose exec app alembic revision --autogenerate -m "describe_your_model_changes"
+
+# 8. Check current migration status inside the running container
+docker compose exec app alembic current
+docker compose exec app alembic history --verbose
+

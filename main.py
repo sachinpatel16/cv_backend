@@ -1,20 +1,40 @@
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import uvicorn
 
 from configs.base import settings
 from modules.auth.routes import router as auth_router
+from modules.peoplefind.routes import router as peoplefind_router
+
+
+from fastapi.staticfiles import StaticFiles
+import os
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
+# Ensure the storage directory exists before mounting to avoid errors
+os.makedirs("storage", exist_ok=True)
+app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+
 # Add GZip compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Add CORS middleware to support cookie exchange
+if settings.BACKEND_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[str(origin).strip("/") for origin in settings.BACKEND_CORS_ORIGINS],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Exception Handlers to match the error response envelope in auth.md
 @app.exception_handler(StarletteHTTPException)
@@ -62,6 +82,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 # Include Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
+
 
 @app.get("/")
 def read_root():
