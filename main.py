@@ -9,6 +9,7 @@ import uvicorn
 from configs.base import settings
 from modules.auth.routes import router as auth_router
 from modules.peoplefind.routes import router as peoplefind_router
+from modules.peoplecount.routes import router as peoplecount_router
 
 
 from fastapi.staticfiles import StaticFiles
@@ -83,6 +84,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Include Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
+app.include_router(peoplecount_router, prefix=settings.API_V1_STR)
 
 
 @app.on_event("startup")

@@ -17,13 +17,7 @@ os.makedirs(VIDEO_MATCHES_DIR, exist_ok=True)
 
 def run_async(coro):
     """Utility helper to run async coroutines inside synchronous Celery tasks."""
-    async def wrapper():
-        try:
-            return await coro
-        finally:
-            from database.session import engine
-            await engine.dispose()
-    return asyncio.run(wrapper())
+    return asyncio.run(coro)
 
 def format_time(seconds: float) -> str:
     """Formats float seconds into HH:MM:SS format."""
@@ -187,18 +181,15 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
 
                         # Match faces in the current frame
                         frame_embeddings = np.array([face["embedding"] for face in faces])
+                        similarities = cosine_similarity([ref_embedding], frame_embeddings)[0]
 
                         best_sim = -1.0
                         best_face = None
 
-                        # Compare each face in the current frame against all target faces in group_embeddings
-                        for ref_embedding in group_embeddings:
-                            similarities = cosine_similarity([ref_embedding], frame_embeddings)[0]
-
-                            for idx, sim in enumerate(similarities):
-                                if sim >= threshold and sim > best_sim:
-                                    best_sim = sim
-                                    best_face = faces[idx]
+                        for idx, sim in enumerate(similarities):
+                            if sim >= threshold and sim > best_sim:
+                                best_sim = sim
+                                best_face = faces[idx]
 
                         if best_face is not None:
                             # We found a match in the video frame!
