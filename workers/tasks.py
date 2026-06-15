@@ -1,5 +1,8 @@
 import os
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 import cv2
 import asyncio
 import numpy as np
@@ -264,4 +267,232 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
             session.status = "completed"
             await db.commit()
 
+    run_async(run())
+
+
+@celery_app.task(name="workers.tasks.index_peoplecount_task")
+def index_peoplecount_task(media_source_id_str: str, filepath: str, media_type: str):
+    """
+    Celery task to run YOLO + ByteTrack to detect, track, and count people in media (photo or video).
+    """
+    media_id = uuid.UUID(media_source_id_str)
+    
+    async def run():
+        async with SessionLocal() as db:
+            from modules.peoplecount.repository import PeopleCountRepository
+            from modules.peoplecount.tracker import BYTETracker, STrack
+            from modules.peoplecount.reid_model import ReIDExtractor
+            from ultralytics import YOLO
+            import torch
+            
+            repo = PeopleCountRepository(db)
+            
+            # Load weights
+            weights_path = os.path.join("storage", "yolo26n.pt")
+            if not os.path.exists(weights_path):
+                # Fallback to standard yolov8n if yolo26n.pt is missing
+                weights_path = "yolov8n.pt"
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model = YOLO(weights_path)
+            model.to(device)
+            
+            # Initialize Re-ID Appearance Feature Extractor
+            try:
+                reid_extractor = ReIDExtractor(device=device)
+            except Exception as e:
+                logger.error(f"Failed to initialize Re-ID Extractor: {e}. Falling back to spatial tracking.")
+                reid_extractor = None
+
+            # Reset ByteTrack static ID counter
+            STrack.reset_id_counter()
+
+            if media_type == "photo":
+                # Process photo
+                frame = cv2.imread(filepath)
+                if frame is None:
+                    await repo.update_media_status(media_id, "failed")
+                    await db.commit()
+                    return
+                
+                # YOLO detection (filter classes)
+                results = model(frame, conf=0.35, iou=0.5, device=device, verbose=False)
+                person_count = 0
+                if results:
+                    result = results[0]
+                    boxes = result.boxes
+                    for box in boxes:
+                        cls_id = int(box.cls[0].item())
+                        class_name = model.names.get(cls_id, "unknown")
+                        if class_name == "person":
+                            person_count += 1
+                
+                # Update DB
+                await repo.update_media_results(
+                    media_id=media_id,
+                    status="completed",
+                    total_people_count=person_count,
+                    peak_people_count=person_count,
+                    average_people_count=float(person_count),
+                    video_duration_seconds=0.0,
+                    processed_filepath=None
+                )
+                await db.commit()
+                
+            elif media_type == "video":
+                # Process video
+                cap = cv2.VideoCapture(filepath)
+                if not cap.isOpened():
+                    await repo.update_media_status(media_id, "failed")
+                    await db.commit()
+                    return
+                
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps <= 0:
+                    fps = 30.0
+                
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                
+                # Output video setup
+                out_filename = f"processed_{media_id}.mp4"
+                processed_filepath = os.path.join("storage", "peoplecount_outputs", out_filename)
+                
+                # Use mp4v codec
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(processed_filepath, fourcc, fps, (width, height))
+                
+                tracker = BYTETracker(
+                    track_thresh=0.35,
+                    match_thresh=0.8,
+                    track_buffer=150,
+                    reid_alpha=0.5,
+                    reid_max_dist=0.55
+                )
+                
+                # Track statistics: track_id -> { "first_frame": int, "last_frame": int, "total_frames": int }
+                tracks_history = {}
+                frame_people_counts = []
+                frame_idx = 0
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        break
+                    
+                    # Run YOLO detection with a lower confidence threshold for ByteTrack
+                    results = model(frame, conf=0.10, iou=0.5, device=device, verbose=False)
+                    detections = []
+                    
+                    if results:
+                        result = results[0]
+                        boxes = result.boxes
+                        for box in boxes:
+                            cls_id = int(box.cls[0].item())
+                            class_name = model.names.get(cls_id, "unknown")
+                            
+                            # ONLY filter for "person"
+                            if class_name == "person":
+                                conf = float(box.conf[0].item())
+                                xyxy = box.xyxy[0].cpu().numpy().tolist()
+                                detections.append({
+                                    "box": xyxy,
+                                    "confidence": conf
+                                })
+                    
+                    # Extract Re-ID appearance features for cropped boxes on scheduled frames
+                    is_reid_frame = (frame_idx % 1 == 0)
+                    if reid_extractor and detections and is_reid_frame:
+                        crops = []
+                        valid_indices = []
+                        h, w, _ = frame.shape
+                        for idx, det in enumerate(detections):
+                            x1, y1, x2, y2 = map(int, det["box"])
+                            x1 = max(0, min(x1, w - 1))
+                            y1 = max(0, min(y1, h - 1))
+                            x2 = max(0, min(x2, w - 1))
+                            y2 = max(0, min(y2, h - 1))
+                            
+                            if (x2 - x1) > 0 and (y2 - y1) > 0:
+                                crop = frame[y1:y2, x1:x2]
+                                crops.append(crop)
+                                valid_indices.append(idx)
+                            else:
+                                det["feature"] = None
+                        
+                        if crops:
+                            try:
+                                features = reid_extractor.extract(crops)
+                                for f_idx, det_idx in enumerate(valid_indices):
+                                    detections[det_idx]["feature"] = features[f_idx]
+                            except Exception as e:
+                                logger.error(f"Error during Re-ID feature extraction: {e}")
+                                for det_idx in valid_indices:
+                                    detections[det_idx]["feature"] = None
+                    
+                    # Update ByteTracker
+                    active_tracks = tracker.update(detections, "person")
+                    
+                    # Track statistics update
+                    frame_people_counts.append(len(active_tracks))
+                    for track in active_tracks:
+                        tid = track.track_id
+                        if tid not in tracks_history:
+                            tracks_history[tid] = {
+                                "first_frame": frame_idx,
+                                "last_frame": frame_idx,
+                                "total_frames": 1
+                            }
+                        else:
+                            tracks_history[tid]["last_frame"] = frame_idx
+                            tracks_history[tid]["total_frames"] += 1
+                        
+                        # Draw bounding box and track ID on the frame
+                        x1, y1, x2, y2 = [int(v) for v in track.tlbr]
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(frame, f"Person {tid}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    writer.write(frame)
+                    frame_idx += 1
+                
+                cap.release()
+                writer.release()
+                
+                # Apply noise filter: only count tracks active for >= 300 frames (matches POC config.yaml)
+                min_track_frames = 300
+                filtered_tracks = {tid: info for tid, info in tracks_history.items() if info["total_frames"] >= min_track_frames}
+                
+                total_unique_people = len(filtered_tracks)
+                peak_people = max(frame_people_counts) if frame_people_counts else 0
+                avg_people = sum(frame_people_counts) / len(frame_people_counts) if frame_people_counts else 0.0
+                video_duration = frame_idx / fps if fps > 0 else 0.0
+                
+                # Save results in PeopleCountResult table
+                for tid, info in filtered_tracks.items():
+                    start_time = info["first_frame"] / fps if fps > 0 else 0.0
+                    end_time = info["last_frame"] / fps if fps > 0 else 0.0
+                    await repo.create_result(
+                        media_id=media_id,
+                        track_id=tid,
+                        first_frame=info["first_frame"],
+                        last_frame=info["last_frame"],
+                        total_frames=info["total_frames"],
+                        start_time=start_time,
+                        end_time=end_time,
+                        class_name="person"
+                    )
+                
+                # Update media details
+                await repo.update_media_results(
+                    media_id=media_id,
+                    status="completed",
+                    total_people_count=total_unique_people,
+                    peak_people_count=peak_people,
+                    average_people_count=avg_people,
+                    video_duration_seconds=video_duration,
+                    processed_filepath=processed_filepath
+                )
+                await db.commit()
+                
     run_async(run())
