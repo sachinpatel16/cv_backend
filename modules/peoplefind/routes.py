@@ -166,6 +166,37 @@ async def get_search_session_matches(
     )
 
 
+@router.get(
+    "/sessions/{session_id}/status",
+    response_model=StandardResponse[SearchSessionResponse],
+    status_code=status.HTTP_200_OK
+)
+async def get_search_session_status(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Fetches the status and detailed metadata of a search session (including processing status).
+    """
+    tenant_id = verify_tenant(current_user)
+    
+    service = PeopleFindService(db)
+    session = await service.repo.get_search_session_with_results(session_id, tenant_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Search session not found or unauthorized access."
+        )
+        
+    session_data = SearchSessionResponse.model_validate(session)
+    return StandardResponse(
+        message="Session status retrieved successfully.",
+        status=status.HTTP_200_OK,
+        data=session_data
+    )
+
+
 
 @router.delete(
     "/media/{media_id}",

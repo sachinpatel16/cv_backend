@@ -131,6 +131,7 @@ ENV/
 env/
 env.bak/
 venv.bak/
+storage/
 
 # SQLite databases
 *.db

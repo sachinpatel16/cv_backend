@@ -72,6 +72,21 @@ def index_video_task(media_source_id_str: str, filepath: str, interval: float = 
             
     run_async(run())
 
+@celery_app.task(name="workers.tasks.index_photo_task")
+def index_photo_task(media_source_id_str: str, filepath: str):
+    """
+    Celery task to index a photo's faces asynchronously.
+    """
+    media_id = uuid.UUID(media_source_id_str)
+    
+    async def run():
+        async with SessionLocal() as db:
+            from modules.peoplefind.service import PeopleFindService
+            service = PeopleFindService(db)
+            await service._index_photo_sync(media_id, filepath)
+            
+    run_async(run())
+
 @celery_app.task(name="workers.tasks.process_video_search_task")
 def process_video_search_task(video_id_str: str, session_id_str: str, threshold: float = 0.45, interval: float = 1.0):
     """
