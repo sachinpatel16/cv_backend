@@ -49,11 +49,34 @@ class PeopleFindService:
             # Save media file locally
             file_ext = os.path.splitext(file.filename)[1].lower()
             unique_name = f"{uuid.uuid4()}{file_ext}"
-            filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
-
+            
             content = await file.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
+            
+            # Convert HEIC/HEIF photos to JPG for standard browser rendering
+            if media_type == "photo" and file_ext in {".heic", ".heif"}:
+                try:
+                    import io
+                    from PIL import Image
+                    import pillow_heif
+                    pillow_heif.register_heif_opener()
+                    
+                    image = Image.open(io.BytesIO(content))
+                    if image.mode != "RGB":
+                        image = image.convert("RGB")
+                    
+                    file_ext = ".jpg"
+                    unique_name = f"{uuid.uuid4()}{file_ext}"
+                    filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
+                    image.save(filepath, "JPEG", quality=90)
+                except Exception as e:
+                    print(f"HEIC conversion failed, falling back to original: {str(e)}")
+                    filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
+                    with open(filepath, "wb") as f:
+                        f.write(content)
+            else:
+                filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
+                with open(filepath, "wb") as f:
+                    f.write(content)
 
             # Create database record
             media = await self.repo.create_media_source(
@@ -67,18 +90,12 @@ class PeopleFindService:
             # Perform indexing based on media type
             try:
                 if media_type == "photo":
-                    # Index static photo
-                    faces = face_rec_service.extract_faces(content)
-                    for face in faces:
-                        await self.repo.create_face_embedding(
-                            media_source_id=media.id,
-                            face_idx=face["face_idx"],
-                            bbox=face["bbox"],
-                            embedding=face["embedding"],
-                            timestamp=None
-                        )
-                    await self.repo.update_media_source_status(media.id, "completed")
+                    # Set status to processing and trigger Celery background task
+                    await self.repo.update_media_source_status(media.id, "processing")
                     await self.db.commit()
+                    
+                    from workers.tasks import index_photo_task
+                    index_photo_task.delay(str(media.id), filepath)
                 
                 elif media_type == "video":
                     # Trigger background video indexing Celery task
@@ -118,11 +135,34 @@ class PeopleFindService:
         # Save reference selfie image
         file_ext = os.path.splitext(file.filename)[1].lower()
         unique_name = f"{uuid.uuid4()}{file_ext}"
-        selfie_path = os.path.join(SELFIES_DIR, unique_name)
-
+        
         content = await file.read()
-        with open(selfie_path, "wb") as f:
-            f.write(content)
+        
+        # Convert HEIC/HEIF selfies to JPG for standard compatibility
+        if file_ext in {".heic", ".heif"}:
+            try:
+                import io
+                from PIL import Image
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+                
+                image = Image.open(io.BytesIO(content))
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                
+                file_ext = ".jpg"
+                unique_name = f"{uuid.uuid4()}{file_ext}"
+                selfie_path = os.path.join(SELFIES_DIR, unique_name)
+                image.save(selfie_path, "JPEG", quality=90)
+            except Exception as e:
+                print(f"HEIC selfie conversion failed, falling back: {str(e)}")
+                selfie_path = os.path.join(SELFIES_DIR, unique_name)
+                with open(selfie_path, "wb") as f:
+                    f.write(content)
+        else:
+            selfie_path = os.path.join(SELFIES_DIR, unique_name)
+            with open(selfie_path, "wb") as f:
+                f.write(content)
 
         # Extract selfie face embedding
         try:
@@ -161,6 +201,36 @@ class PeopleFindService:
         )
 
         return session
+
+    async def _index_photo_sync(self, media_id: uuid.UUID, filepath: str) -> None:
+        """
+        Helper method that processes a photo, extracts faces, 
+        and indexes faces into the database. Called asynchronously by Celery.
+        """
+        if not os.path.exists(filepath):
+            await self.repo.update_media_source_status(media_id, "failed")
+            await self.db.commit()
+            return
+
+        try:
+            with open(filepath, "rb") as f:
+                content = f.read()
+
+            faces = face_rec_service.extract_faces(content)
+            for face in faces:
+                await self.repo.create_face_embedding(
+                    media_source_id=media_id,
+                    face_idx=face["face_idx"],
+                    bbox=face["bbox"],
+                    embedding=face["embedding"],
+                    timestamp=None
+                )
+            await self.repo.update_media_source_status(media_id, "completed")
+            await self.db.commit()
+        except Exception as e:
+            await self.repo.update_media_source_status(media_id, "failed")
+            await self.db.commit()
+            raise e
 
     async def _index_video_sync(self, media_id: uuid.UUID, filepath: str, interval: float = 1.0) -> None:
         """
@@ -247,11 +317,34 @@ class PeopleFindService:
         # Save reference selfie image
         file_ext = os.path.splitext(file.filename)[1].lower()
         unique_name = f"{uuid.uuid4()}{file_ext}"
-        selfie_path = os.path.join(SELFIES_DIR, unique_name)
-
+        
         content = await file.read()
-        with open(selfie_path, "wb") as f:
-            f.write(content)
+        
+        # Convert HEIC/HEIF selfies to JPG for standard compatibility
+        if file_ext in {".heic", ".heif"}:
+            try:
+                import io
+                from PIL import Image
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+                
+                image = Image.open(io.BytesIO(content))
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                
+                file_ext = ".jpg"
+                unique_name = f"{uuid.uuid4()}{file_ext}"
+                selfie_path = os.path.join(SELFIES_DIR, unique_name)
+                image.save(selfie_path, "JPEG", quality=90)
+            except Exception as e:
+                print(f"HEIC selfie conversion failed, falling back: {str(e)}")
+                selfie_path = os.path.join(SELFIES_DIR, unique_name)
+                with open(selfie_path, "wb") as f:
+                    f.write(content)
+        else:
+            selfie_path = os.path.join(SELFIES_DIR, unique_name)
+            with open(selfie_path, "wb") as f:
+                f.write(content)
 
         # Extract selfie faces
         try:
@@ -374,3 +467,57 @@ class PeopleFindService:
                     
         await self.db.commit()
         return len(filepaths)
+
+    @classmethod
+    async def migrate_existing_heic(cls):
+        """
+        Background migration method to convert all existing HEIC files to JPG format.
+        """
+        from database.session import SessionLocal
+        from PIL import Image
+        import pillow_heif
+        from sqlalchemy import select
+        
+        try:
+            pillow_heif.register_heif_opener()
+            async with SessionLocal() as session:
+                result = await session.execute(
+                    select(MediaSource).where(
+                        (MediaSource.filepath.ilike("%.heic")) | (MediaSource.filepath.ilike("%.heif"))
+                    )
+                )
+                sources = result.scalars().all()
+                if not sources:
+                    return
+                
+                print(f"[HEIC Migration] Found {len(sources)} HEIC/HEIF media sources to convert.")
+                for source in sources:
+                    old_path = source.filepath
+                    if not os.path.exists(old_path):
+                        print(f"[HEIC Migration] File not found on disk: {old_path}")
+                        continue
+                    try:
+                        image = Image.open(old_path)
+                        if image.mode != "RGB":
+                            image = image.convert("RGB")
+                        
+                        base, _ = os.path.splitext(old_path)
+                        new_path = f"{base}.jpg"
+                        
+                        image.save(new_path, "JPEG", quality=90)
+                        source.filepath = new_path
+                        
+                        if source.filename.lower().endswith(".heic"):
+                            source.filename = source.filename[:-5] + ".jpg"
+                        elif source.filename.lower().endswith(".heif"):
+                            source.filename = source.filename[:-5] + ".jpg"
+                        
+                        os.remove(old_path)
+                        print(f"[HEIC Migration] Converted: {old_path} -> {new_path}")
+                    except Exception as err:
+                        print(f"[HEIC Migration] Failed to convert {old_path}: {err}")
+                await session.commit()
+                print("[HEIC Migration] Completed migration successfully.")
+        except Exception as e:
+            print(f"[HEIC Migration] Error during background migration: {str(e)}")
+

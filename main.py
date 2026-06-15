@@ -85,6 +85,14 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
 
 
+@app.on_event("startup")
+async def startup_event():
+    import asyncio
+    from modules.peoplefind.service import PeopleFindService
+    asyncio.create_task(PeopleFindService.migrate_existing_heic())
+
+
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Computer Vision API"}
