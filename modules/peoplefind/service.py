@@ -200,7 +200,8 @@ class PeopleFindService:
             interval=1.0
         )
 
-        return session
+        loaded_session = await self.repo.get_search_session_with_results(session.id, tenant_id)
+        return loaded_session or session
 
     async def _index_photo_sync(self, media_id: uuid.UUID, filepath: str) -> None:
         """
