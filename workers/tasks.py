@@ -123,7 +123,21 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
             session_out_dir = os.path.join(VIDEO_MATCHES_DIR, str(session.id))
             os.makedirs(session_out_dir, exist_ok=True)
 
-            ref_embedding = np.array(session.selfie_embedding)
+            # Load all face embeddings from the reference selfie image if possible
+            group_embeddings = []
+            if session.selfie_path and os.path.exists(session.selfie_path):
+                try:
+                    with open(session.selfie_path, "rb") as sf:
+                        selfie_content = sf.read()
+                    selfie_faces = face_rec_service.extract_faces(selfie_content)
+                    group_embeddings = [np.array(face["embedding"]) for face in selfie_faces]
+                except Exception as e:
+                    print(f"Failed to extract group faces from {session.selfie_path}: {e}")
+
+            # Fallback to the single stored database embedding if group extraction failed or detected no faces
+            if not group_embeddings:
+                group_embeddings = [np.array(session.selfie_embedding)]
+
             cap = cv2.VideoCapture(media.filepath)
             if not cap.isOpened():
                 session.status = "failed"
@@ -167,15 +181,18 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
 
                         # Match faces in the current frame
                         frame_embeddings = np.array([face["embedding"] for face in faces])
-                        similarities = cosine_similarity([ref_embedding], frame_embeddings)[0]
 
                         best_sim = -1.0
                         best_face = None
 
-                        for idx, sim in enumerate(similarities):
-                            if sim >= threshold and sim > best_sim:
-                                best_sim = sim
-                                best_face = faces[idx]
+                        # Compare each face in the current frame against all target faces in group_embeddings
+                        for ref_embedding in group_embeddings:
+                            similarities = cosine_similarity([ref_embedding], frame_embeddings)[0]
+
+                            for idx, sim in enumerate(similarities):
+                                if sim >= threshold and sim > best_sim:
+                                    best_sim = sim
+                                    best_face = faces[idx]
 
                         if best_face is not None:
                             # We found a match in the video frame!
