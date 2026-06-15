@@ -36,6 +36,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+      - ${INSIGHTFACE_CACHE_DIR:-~/.insightface}:/root/.insightface
     env_file:
       - .env
     environment:
@@ -54,6 +55,7 @@ services:
     command: celery -A workers.celery worker --loglevel=info
     volumes:
       - .:/app
+      - ${INSIGHTFACE_CACHE_DIR:-~/.insightface}:/root/.insightface
     env_file:
       - .env
     environment:
