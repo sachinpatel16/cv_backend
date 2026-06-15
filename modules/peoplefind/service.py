@@ -374,20 +374,23 @@ class PeopleFindService:
         )
         await self.db.commit()
 
-        # Find matching faces in DB (scoped to the same tenant_id)
+        # Find matching faces in DB (scoped to the same tenant_id) for all faces detected in the photo
         try:
-            matches = await self.repo.find_similar_faces(
-                tenant_id=tenant_id,
-                target_embedding=ref_embedding,
-                threshold=threshold
-            )
-
-            # De-duplicate matches per photo (only keep highest similarity match per source media item)
             media_best = {}  # media_source_id -> (similarity, face_embedding)
-            for face_emb, sim in matches:
-                media_id = face_emb.media_source_id
-                if media_id not in media_best or sim > media_best[media_id][0]:
-                    media_best[media_id] = (sim, face_emb)
+            
+            for face in faces:
+                target_emb = face["embedding"]
+                matches = await self.repo.find_similar_faces(
+                    tenant_id=tenant_id,
+                    target_embedding=target_emb,
+                    threshold=threshold
+                )
+
+                # De-duplicate matches per photo (only keep highest similarity match per source media item)
+                for face_emb, sim in matches:
+                    media_id = face_emb.media_source_id
+                    if media_id not in media_best or sim > media_best[media_id][0]:
+                        media_best[media_id] = (sim, face_emb)
 
             # Save confirmed matches in FaceSearchResult table
             for media_id, (sim, face_emb) in media_best.items():
