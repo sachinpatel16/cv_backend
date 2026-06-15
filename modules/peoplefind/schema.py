@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
@@ -36,6 +36,11 @@ class SearchSessionResponse(BaseModel):
     status: str
     created_at: datetime
     results: List[SearchResultResponse] = []
+
+    @computed_field
+    @property
+    def job_id(self) -> UUID:
+        return self.id
 
     class Config:
         from_attributes = True
