@@ -14,13 +14,28 @@ class FaceRecognitionService:
             # Register HEIF opener to support HEIC format
             register_heif_opener()
             
-            # Initialize detection and recognition pipeline on CPU
-            self.app = FaceAnalysis(
-                name="buffalo_l",
-                providers=["CPUExecutionProvider"]
-            )
-            # Default det_size=(640, 640) offers the best balance of speed & quality on CPU
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
+            try:
+                # Initialize detection and recognition pipeline on CPU
+                self.app = FaceAnalysis(
+                    name="buffalo_l",
+                    providers=["CPUExecutionProvider"]
+                )
+                # Default det_size=(640, 640) offers the best balance of speed & quality on CPU
+                self.app.prepare(ctx_id=0, det_size=(640, 640))
+            except Exception as e:
+                import sys
+                print(
+                    "\n[FaceRecognitionService ERROR] Failed to initialize InsightFace FaceAnalysis. "
+                    "This usually happens when the pre-trained model files are corrupted "
+                    "(e.g., due to an interrupted download) or missing.\n"
+                    "HOW TO FIX:\n"
+                    "1. If running in Docker, ensure you mount the host's '~/.insightface' folder to "
+                    "'/root/.insightface' in docker-compose.yml so the container can reuse your host's models.\n"
+                    "2. If the files are corrupted, delete the buffalo_l directory at "
+                    "~/.insightface/models/buffalo_l/ on the host and restart the container to let it redownload clean files.\n",
+                    file=sys.stderr
+                )
+                raise e
 
     def extract_faces(self, image_bytes: bytes) -> list[dict]:
         """
