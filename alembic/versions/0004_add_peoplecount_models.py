@@ -1,8 +1,9 @@
 """add_peoplecount_models
 
-Revision ID: 0003
-Revises: 0002
+Revision ID: 0004
+Revises: 0003
 Create Date: 2026-06-15 07:19:51.098402
+
 """
 
 from alembic import op
@@ -10,8 +11,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '0003'
-down_revision = '0002'
+revision = '0004'
+down_revision = '0003'
 branch_labels = None
 depends_on = None
 
