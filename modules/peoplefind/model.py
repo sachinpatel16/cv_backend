@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import ARRAY
 from pgvector.sqlalchemy import Vector
 from database.base import BaseModel
+from modules.users.model import User
 
 class MediaSource(BaseModel):
     """
