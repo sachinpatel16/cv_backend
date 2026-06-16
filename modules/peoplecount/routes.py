@@ -33,6 +33,9 @@ def verify_tenant(user: User) -> uuid.UUID:
 async def upload_and_count_media(
     files: List[UploadFile] = File(..., description="The photo(s) or video file(s) to upload and perform people counting on"),
     media_type: str = Form(..., description="Type of media file: 'photo' or 'video'"),
+    min_track_frames: int = Form(300, description="Minimum frames a track must be active to be counted. Default: 300"),
+    track_buffer: int = Form(150, description="Number of frames to keep a lost track in memory. Default: 150"),
+    confidence_threshold: float = Form(0.35, description="Confidence threshold for detections. Default: 0.35"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -48,7 +51,14 @@ async def upload_and_count_media(
         )
 
     service = PeopleCountService(db)
-    media_list = await service.upload_and_process_media(files, media_type, tenant_id)
+    media_list = await service.upload_and_process_media(
+        files=files,
+        media_type=media_type,
+        tenant_id=tenant_id,
+        min_track_frames=min_track_frames,
+        track_buffer=track_buffer,
+        confidence_threshold=confidence_threshold
+    )
     
     media_data = [PeopleCountMediaResponse.model_validate(m) for m in media_list]
     return StandardResponse(

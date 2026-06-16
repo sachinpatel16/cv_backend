@@ -18,7 +18,13 @@ class PeopleCountService:
         self.db = db
 
     async def upload_and_process_media(
-        self, files: List[UploadFile], media_type: str, tenant_id: uuid.UUID
+        self,
+        files: List[UploadFile],
+        media_type: str,
+        tenant_id: uuid.UUID,
+        min_track_frames: int = 300,
+        track_buffer: int = 150,
+        confidence_threshold: float = 0.35
     ) -> List[PeopleCountMedia]:
         """
         Uploads photos or videos for people counting, saves them, and schedules a Celery task.
@@ -70,7 +76,14 @@ class PeopleCountService:
                 await self.db.commit()
                 
                 from workers.tasks import index_peoplecount_task
-                index_peoplecount_task.delay(str(media.id), filepath, media_type)
+                index_peoplecount_task.delay(
+                    str(media.id),
+                    filepath,
+                    media_type,
+                    min_track_frames,
+                    track_buffer,
+                    confidence_threshold
+                )
             except Exception as e:
                 await self.repo.update_media_status(media.id, "failed")
                 await self.db.commit()

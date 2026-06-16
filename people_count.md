@@ -39,6 +39,9 @@ Uploads one or more photos or videos and starts the background YOLO + ByteTrack 
     * `files`: `File[]` (One or more photo or video files)
   * **Form Data (Form fields):**
     * `media_type`: `string` (`"photo"` or `"video"`)
+    * `min_track_frames`: `integer` (Optional. Minimum number of frames a track must be active to be counted. Default: `300`)
+    * `track_buffer`: `integer` (Optional. Number of frames to keep a lost track in memory. Default: `150`)
+    * `confidence_threshold`: `float` (Optional. YOLO detection confidence threshold. Default: `0.35`)
 
 #### Example Request (cURL):
 ```bash
@@ -46,7 +49,10 @@ curl -X POST "http://localhost:8000/api/v1/peoplecount/media" \
   -H "accept: application/json" \
   -H "Content-Type: multipart/form-data" \
   -F "files=@revideo.mp4" \
-  -F "media_type=video"
+  -F "media_type=video" \
+  -F "min_track_frames=300" \
+  -F "track_buffer=150" \
+  -F "confidence_threshold=0.35"
 ```
 
 #### Example Response (`201 Created`):

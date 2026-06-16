@@ -279,7 +279,14 @@ def process_video_search_task(
 
 
 @celery_app.task(name="workers.tasks.index_peoplecount_task")
-def index_peoplecount_task(media_source_id_str: str, filepath: str, media_type: str):
+def index_peoplecount_task(
+    media_source_id_str: str,
+    filepath: str,
+    media_type: str,
+    min_track_frames: int = 300,
+    track_buffer: int = 150,
+    confidence_threshold: float = 0.35
+):
     """
     Celery task to run YOLO + ByteTrack to detect, track, and count people in media (photo or video).
     """
@@ -324,7 +331,7 @@ def index_peoplecount_task(media_source_id_str: str, filepath: str, media_type: 
                     return
                 
                 # YOLO detection (filter classes)
-                results = model(frame, conf=0.35, iou=0.5, device=device, verbose=False)
+                results = model(frame, conf=confidence_threshold, iou=0.5, device=device, verbose=False)
                 person_count = 0
                 if results:
                     result = results[0]
@@ -372,9 +379,9 @@ def index_peoplecount_task(media_source_id_str: str, filepath: str, media_type: 
                 writer = cv2.VideoWriter(processed_filepath, fourcc, fps, (width, height))
                 
                 tracker = BYTETracker(
-                    track_thresh=0.35,
+                    track_thresh=confidence_threshold,
                     match_thresh=0.8,
-                    track_buffer=150,
+                    track_buffer=track_buffer,
                     reid_alpha=0.5,
                     reid_max_dist=0.55
                 )
@@ -467,8 +474,7 @@ def index_peoplecount_task(media_source_id_str: str, filepath: str, media_type: 
                 cap.release()
                 writer.release()
                 
-                # Apply noise filter: only count tracks active for >= 300 frames (matches POC config.yaml)
-                min_track_frames = 300
+                # Apply noise filter
                 filtered_tracks = {tid: info for tid, info in tracks_history.items() if info["total_frames"] >= min_track_frames}
                 
                 total_unique_people = len(filtered_tracks)
