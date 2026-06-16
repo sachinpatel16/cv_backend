@@ -46,3 +46,28 @@ class SearchSessionResponse(BaseModel):
         from_attributes = True
 
 
+class UserHistoryPayload(BaseModel):
+    id: UUID
+    first_name: str
+    last_name: str
+    email: str
+    role: str
+
+    class Config:
+        from_attributes = True
+
+
+class SearchSessionHistoryResponse(BaseModel):
+    id: UUID
+    selfie_path: str
+    threshold: float
+    status: str
+    created_at: datetime
+    user: Optional[UserHistoryPayload] = None
+    total_matches: int
+    matched_images: List[str]
+
+    class Config:
+        from_attributes = True
+
+

@@ -11,7 +11,8 @@ from modules.peoplefind.service import PeopleFindService
 from modules.peoplefind.schema import (
     MediaSourceResponse,
     SearchSessionResponse,
-    SearchResultResponse
+    SearchResultResponse,
+    SearchSessionHistoryResponse
 )
 
 router = APIRouter(prefix="/peoplefind", tags=["People Search & Face Recognition"])
@@ -101,7 +102,7 @@ async def search_by_reference_selfie(
     tenant_id = verify_tenant(current_user)
     
     service = PeopleFindService(db)
-    session = await service.search_by_selfie(file, threshold, tenant_id)
+    session = await service.search_by_selfie(file, threshold, tenant_id, user_id=current_user.id)
     
     session_data = SearchSessionResponse.model_validate(session)
     return StandardResponse(
@@ -129,13 +130,45 @@ async def search_video_on_demand(
     tenant_id = verify_tenant(current_user)
     
     service = PeopleFindService(db)
-    session = await service.search_in_video_async(video_id, file, threshold, tenant_id)
+    session = await service.search_in_video_async(video_id, file, threshold, tenant_id, user_id=current_user.id)
     
     session_data = SearchSessionResponse.model_validate(session)
     return StandardResponse(
         message="Video search task submitted successfully in the background.",
         status=status.HTTP_202_ACCEPTED,
         data=session_data
+    )
+
+
+@router.get(
+    "/sessions/history",
+    response_model=StandardResponse[List[SearchSessionHistoryResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def list_search_sessions_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves previous search sessions history scoped by tenant.
+    For admin and superadmin roles, it retrieves all sessions in the tenant namespace.
+    For operator and viewer roles, it retrieves only their own search sessions history.
+    """
+    tenant_id = verify_tenant(current_user)
+    
+    # Check role: admin/superadmin sees all, operator/viewer only sees their own
+    user_id_filter = None
+    if current_user.role not in {"admin", "superadmin"}:
+        user_id_filter = current_user.id
+        
+    service = PeopleFindService(db)
+    sessions = await service.get_search_history(tenant_id, user_id=user_id_filter)
+    
+    sessions_data = [SearchSessionHistoryResponse.model_validate(s) for s in sessions]
+    return StandardResponse(
+        message=f"Retrieved {len(sessions_data)} search session(s) in history.",
+        status=status.HTTP_200_OK,
+        data=sessions_data
     )
 
 

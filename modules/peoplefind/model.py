@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from sqlalchemy import String, Integer, Float, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -47,12 +48,32 @@ class FaceSearchSession(BaseModel):
     __tablename__ = "face_search_sessions"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     selfie_path: Mapped[str] = mapped_column(String(512), nullable=False)  # Reference selfie image file path
     selfie_embedding: Mapped[list[float]] = mapped_column(Vector(512), nullable=False) # Extracted search face vector
     threshold: Mapped[float] = mapped_column(Float, default=0.45)
     status: Mapped[str] = mapped_column(String(20), default="pending")      # 'pending' | 'completed' | 'failed'
 
+    user: Mapped[Optional["User"]] = relationship()
     results: Mapped[list["FaceSearchResult"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+
+    @property
+    def total_matches(self) -> int:
+        return len(self.results) if self.results else 0
+
+    @property
+    def matched_images(self) -> list[str]:
+        if not self.results:
+            return []
+        seen = set()
+        paths = []
+        for r in self.results:
+            if r.media_source and not r.media_source.is_delete:
+                path = r.media_source.filepath
+                if path not in seen:
+                    seen.add(path)
+                    paths.append(path)
+        return paths
 
 
 class FaceSearchResult(BaseModel):
