@@ -185,6 +185,8 @@ Submits a background job (Celery task) to search inside a specific video for occ
   * **Form Data (Form fields):**
     * `video_id`: `string (UUID)` (The database ID of the video to search in)
     * `threshold`: `float` (Optional, default `0.45`. Minimum matching threshold)
+    * `interval`: `float` (Optional, default `1.0`. Sampling interval in seconds to extract frames from the video)
+    * `buffalo_model`: `string` (Optional, default `"buffalo_l"`. InsightFace face recognition model name to use)
   * **Files (Form fields):**
     * `file`: `File` (Reference selfie image)
 
@@ -195,7 +197,9 @@ curl -X POST "http://localhost:8000/api/v1/peoplefind/search-video" \
   -H "Content-Type: multipart/form-data" \
   -F "video_id=2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d" \
   -F "file=@my_selfie.png" \
-  -F "threshold=0.45"
+  -F "threshold=0.45" \
+  -F "interval=2.0" \
+  -F "buffalo_model=buffalo_l"
 ```
 
 #### Example Response (`202 Accepted`):
