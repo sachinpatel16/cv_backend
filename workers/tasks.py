@@ -20,7 +20,13 @@ os.makedirs(VIDEO_MATCHES_DIR, exist_ok=True)
 
 def run_async(coro):
     """Utility helper to run async coroutines inside synchronous Celery tasks."""
-    return asyncio.run(coro)
+    async def wrapper():
+        try:
+            return await coro
+        finally:
+            from database.session import engine
+            await engine.dispose()
+    return asyncio.run(wrapper())
 
 def format_time(seconds: float) -> str:
     """Formats float seconds into HH:MM:SS format."""
