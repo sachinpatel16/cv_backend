@@ -87,9 +87,18 @@ app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 async def startup_event():
+    from database.redis import init_redis
+    await init_redis()
+
     import asyncio
     from modules.peoplefind.service import PeopleFindService
     asyncio.create_task(PeopleFindService.migrate_existing_heic())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    from database.redis import close_redis
+    await close_redis()
 
 
 

@@ -116,9 +116,15 @@ class PeopleFindService:
             results.append(media)
 
         return results
-
     async def search_in_video_async(
-        self, video_id: uuid.UUID, file: UploadFile, threshold: float, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
+        self,
+        video_id: uuid.UUID,
+        file: UploadFile,
+        threshold: float,
+        tenant_id: uuid.UUID,
+        user_id: Optional[uuid.UUID] = None,
+        interval: float = 1.0,
+        model_name: str = "buffalo_l"
     ) -> FaceSearchSession:
         """
         Registers a selfie and launches a Celery task to search occurrences of that face 
@@ -166,7 +172,7 @@ class PeopleFindService:
 
         # Extract selfie face embedding
         try:
-            faces = face_rec_service.extract_faces(content)
+            faces = face_rec_service.extract_faces(content, model_name=model_name)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -198,11 +204,13 @@ class PeopleFindService:
             str(video_id),
             str(session.id),
             threshold,
-            interval=1.0
+            interval=interval,
+            model_name=model_name
         )
 
         loaded_session = await self.repo.get_search_session_with_results(session.id, tenant_id)
         return loaded_session or session
+
 
     async def _index_photo_sync(self, media_id: uuid.UUID, filepath: str) -> None:
         """

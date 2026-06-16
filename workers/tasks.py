@@ -93,8 +93,15 @@ def index_photo_task(media_source_id_str: str, filepath: str):
             
     run_async(run())
 
+
 @celery_app.task(name="workers.tasks.process_video_search_task")
-def process_video_search_task(video_id_str: str, session_id_str: str, threshold: float = 0.45, interval: float = 1.0):
+def process_video_search_task(
+    video_id_str: str, 
+    session_id_str: str, 
+    threshold: float = 0.45, 
+    interval: float = 1.0, 
+    model_name: str = "buffalo_l"
+):
     """
     Celery task to search a target video file on-demand for a target face, 
     annotating and saving keyframes and generating a summary presence report.
@@ -135,7 +142,7 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
                 try:
                     with open(session.selfie_path, "rb") as sf:
                         selfie_content = sf.read()
-                    selfie_faces = face_rec_service.extract_faces(selfie_content)
+                    selfie_faces = face_rec_service.extract_faces(selfie_content, model_name=model_name)
                     group_embeddings = [np.array(face["embedding"]) for face in selfie_faces]
                 except Exception as e:
                     print(f"Failed to extract group faces from {session.selfie_path}: {e}")
@@ -180,7 +187,8 @@ def process_video_search_task(video_id_str: str, session_id_str: str, threshold:
                     frame_bytes = encoded_img.tobytes()
 
                     # Extract face embeddings
-                    faces = face_rec_service.extract_faces(frame_bytes)
+                    faces = face_rec_service.extract_faces(frame_bytes, model_name=model_name)
+
                     if len(faces) > 0:
                         sec = f_idx / fps
                         time_str = format_time(sec)
