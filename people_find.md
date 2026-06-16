@@ -22,10 +22,11 @@ This document describes the API endpoints for the **People Search & Face Recogni
 2. [List Event Media](#2-list-event-media) (`GET /peoplefind/media`)
 3. [Search by Reference Selfie](#3-search-by-reference-selfie) (`POST /peoplefind/search`)
 4. [Search Specific Video On-Demand](#4-search-specific-video-on-demand) (`POST /peoplefind/search-video`)
-5. [Get Search Session Matches](#5-get-search-session-matches) (`GET /peoplefind/sessions/{session_id}`)
-6. [Get Search Session Status](#6-get-search-session-status) (`GET /peoplefind/sessions/{session_id}/status`)
-7. [Delete Single Event Media](#7-delete-single-event-media) (`DELETE /peoplefind/media/{media_id}`)
-8. [Bulk Delete All Event Media](#8-bulk-delete-all-event-media) (`DELETE /peoplefind/media`)
+5. [Get Search Session History](#5-get-search-session-history) (`GET /peoplefind/sessions/history`)
+6. [Get Search Session Matches](#6-get-search-session-matches) (`GET /peoplefind/sessions/{session_id}`)
+7. [Get Search Session Status](#7-get-search-session-status) (`GET /peoplefind/sessions/{session_id}/status`)
+8. [Delete Single Event Media](#8-delete-single-event-media) (`DELETE /peoplefind/media/{media_id}`)
+9. [Bulk Delete All Event Media](#9-bulk-delete-all-event-media) (`DELETE /peoplefind/media`)
 
 ---
 
@@ -216,7 +217,52 @@ curl -X POST "http://localhost:8000/api/v1/peoplefind/search-video" \
 
 ---
 
-### 5. Get Search Session Matches
+### 5. Get Search Session History
+Retrieves previous search sessions history scoped by tenant.
+* For `admin` and `superadmin` roles, it retrieves all sessions in the tenant namespace.
+* For `operator` and `viewer` roles, it retrieves only their own search sessions history.
+
+* **URL:** `/peoplefind/sessions/history`
+* **Method:** `GET`
+* **Headers:** Cookie authentication required
+
+#### Example Request (cURL):
+```bash
+curl -X GET "http://localhost:8000/api/v1/peoplefind/sessions/history" \
+  -H "accept: application/json"
+```
+
+#### Example Response (`200 OK`):
+```json
+{
+  "message": "Retrieved 1 search session(s) in history.",
+  "status": 200,
+  "data": [
+    {
+      "id": "ee5e54d8-790f-488f-b98a-232145b597a1",
+      "selfie_path": "storage/selfies/33f21edb-3152-4a36-b940-037ddbfb36e3.png",
+      "threshold": 0.45,
+      "status": "completed",
+      "created_at": "2026-06-12T12:05:00Z",
+      "user": {
+        "id": "3f82e88a-2253-4b69-873b-f458ff62bb7a",
+        "first_name": "John",
+        "last_name": "Doe",
+        "email": "john.doe@example.com",
+        "role": "admin"
+      },
+      "total_matches": 1,
+      "matched_images": [
+        "storage/media_sources/88ff6e6b-a2c3-4d7a-8fbb-5e662919aa7e.mp4"
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### 6. Get Search Session Matches
 Retrieves all matching media results for a previously submitted/completed search session, sorted by similarity.
 
 * **URL:** `/peoplefind/sessions/{session_id}`
@@ -260,7 +306,7 @@ curl -X GET "http://localhost:8000/api/v1/peoplefind/sessions/ee5e54d8-790f-488f
 
 ---
 
-### 6. Get Search Session Status
+### 7. Get Search Session Status
 Fetches the status and detailed metadata of a search session (useful for tracking on-demand background search jobs).
 
 * **URL:** `/peoplefind/sessions/{session_id}/status`
@@ -300,7 +346,7 @@ curl -X GET "http://localhost:8000/api/v1/peoplefind/sessions/ee5e54d8-790f-488f
           "filepath": "storage/media_sources/88ff6e6b-a2c3-4d7a-8fbb-5e662919aa7e.mp4",
           "status": "completed",
           "created_at": "2026-06-11T13:30:00Z"
-        }
+         }
       }
     ]
   }
@@ -312,7 +358,7 @@ curl -X GET "http://localhost:8000/api/v1/peoplefind/sessions/ee5e54d8-790f-488f
 
 ---
 
-### 7. Delete Single Event Media
+### 8. Delete Single Event Media
 Soft-deletes a single media item, removes its associated index face embeddings, and deletes the physical file from the server storage.
 
 * **URL:** `/peoplefind/media/{media_id}`
@@ -337,7 +383,7 @@ curl -X DELETE "http://localhost:8000/api/v1/peoplefind/media/8c36171a-6dac-4004
 
 ---
 
-### 8. Bulk Delete All Event Media
+### 9. Bulk Delete All Event Media
 Soft-deletes all media sources and index face embeddings for the active tenant namespace, and deletes all physical files from disk.
 
 * **URL:** `/peoplefind/media`

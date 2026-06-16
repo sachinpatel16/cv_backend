@@ -101,11 +101,12 @@ class PeopleFindRepository:
         return face
 
     async def create_search_session(
-        self, tenant_id: uuid.UUID, selfie_path: str, selfie_embedding: list[float], threshold: float
+        self, tenant_id: uuid.UUID, selfie_path: str, selfie_embedding: list[float], threshold: float, user_id: Optional[uuid.UUID] = None
     ) -> FaceSearchSession:
         """Create a new search session record."""
         session = FaceSearchSession(
             tenant_id=tenant_id,
+            user_id=user_id,
             selfie_path=selfie_path,
             selfie_embedding=selfie_embedding,
             threshold=threshold,
@@ -141,6 +142,28 @@ class PeopleFindRepository:
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
+
+    async def get_search_sessions_history(
+        self, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
+    ) -> List[FaceSearchSession]:
+        """Fetch all non-deleted search sessions for a specific tenant, eagerly loading user, results, and media sources."""
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(FaceSearchSession)
+            .options(
+                selectinload(FaceSearchSession.user),
+                selectinload(FaceSearchSession.results).selectinload(FaceSearchResult.media_source)
+            )
+            .where(
+                FaceSearchSession.tenant_id == tenant_id,
+                FaceSearchSession.is_delete == False
+            )
+        )
+        if user_id is not None:
+            stmt = stmt.where(FaceSearchSession.user_id == user_id)
+        stmt = stmt.order_by(FaceSearchSession.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
 
     async def update_search_session_status(self, session_id: uuid.UUID, status: str) -> None:
         """Update matching status of a search session."""

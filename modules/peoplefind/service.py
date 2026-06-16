@@ -118,7 +118,7 @@ class PeopleFindService:
         return results
 
     async def search_in_video_async(
-        self, video_id: uuid.UUID, file: UploadFile, threshold: float, tenant_id: uuid.UUID
+        self, video_id: uuid.UUID, file: UploadFile, threshold: float, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
     ) -> FaceSearchSession:
         """
         Registers a selfie and launches a Celery task to search occurrences of that face 
@@ -185,6 +185,7 @@ class PeopleFindService:
         # Create Search Session in pending status
         session = await self.repo.create_search_session(
             tenant_id=tenant_id,
+            user_id=user_id,
             selfie_path=selfie_path,
             selfie_embedding=ref_embedding,
             threshold=threshold
@@ -309,7 +310,7 @@ class PeopleFindService:
         await self.db.commit()
 
     async def search_by_selfie(
-        self, file: UploadFile, threshold: float, tenant_id: uuid.UUID
+        self, file: UploadFile, threshold: float, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
     ) -> FaceSearchSession:
         """
         Registers reference selfie, extracts the main face vector, performs similarity search 
@@ -369,6 +370,7 @@ class PeopleFindService:
         # Create Search Session
         session = await self.repo.create_search_session(
             tenant_id=tenant_id,
+            user_id=user_id,
             selfie_path=selfie_path,
             selfie_embedding=ref_embedding,
             threshold=threshold
@@ -422,6 +424,12 @@ class PeopleFindService:
     async def get_session_details(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> List[FaceSearchResult]:
         """Retrieve results and matching details of a session, sorted by similarity."""
         return await self.repo.get_session_results(session_id, tenant_id)
+
+    async def get_search_history(
+        self, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
+    ) -> List[FaceSearchSession]:
+        """Fetch search history sessions scoped by tenant, optionally filtered by user."""
+        return await self.repo.get_search_sessions_history(tenant_id, user_id)
 
 
 
