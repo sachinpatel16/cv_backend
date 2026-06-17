@@ -27,6 +27,7 @@ This document describes the API endpoints for the **People Search & Face Recogni
 7. [Get Search Session Status](#7-get-search-session-status) (`GET /peoplefind/sessions/{session_id}/status`)
 8. [Delete Single Event Media](#8-delete-single-event-media) (`DELETE /peoplefind/media/{media_id}`)
 9. [Bulk Delete All Event Media](#9-bulk-delete-all-event-media) (`DELETE /peoplefind/media`)
+10. [Tenant-wide Unique Faces Gallery](#10-tenant-wide-unique-faces-gallery) (`GET /peoplefind/unique-faces`)
 
 ---
 
@@ -405,5 +406,63 @@ curl -X DELETE "http://localhost:8000/api/v1/peoplefind/media" \
   "message": "Successfully deleted 4 media source(s) and all associated face embeddings.",
   "status": 200,
   "data": null
+}
+```
+
+---
+
+### 10. Tenant-wide Unique Faces Gallery
+Clusters and groups all face detections across all tenant photos and videos, returning unique identities (people) and the list of media file occurrences they appear in.
+
+* **URL:** `/peoplefind/unique-faces`
+* **Method:** `GET`
+* **Request Parameters:**
+  * **Query Parameters:**
+    * `threshold`: `float` (Optional, default `0.45`. Cluster similarity threshold between `0.0` and `1.0`)
+
+#### Example Request (cURL):
+```bash
+curl -X GET "http://localhost:8000/api/v1/peoplefind/unique-faces?threshold=0.45" \
+  -H "accept: application/json"
+```
+
+#### Example Response (`200 OK`):
+```json
+{
+  "message": "Retrieved 2 unique face(s) across all tenant media.",
+  "status": 200,
+  "data": [
+    {
+      "cluster_id": 0,
+      "representative_face_id": "8c36171a-6dac-4004-b4a2-6c54fd22a0e5",
+      "representative_media_source_id": "ee5e54d8-790f-488f-b98a-232145b597a1",
+      "representative_filepath": "storage/media_sources/photo1.jpg",
+      "bbox": [120, 80, 240, 260],
+      "timestamp": null,
+      "total_occurrences": 2,
+      "occurrences": [
+        {
+          "id": "8c36171a-6dac-4004-b4a2-6c54fd22a0e5",
+          "media_source_id": "ee5e54d8-790f-488f-b98a-232145b597a1",
+          "filename": "photo1.jpg",
+          "filepath": "storage/media_sources/photo1.jpg",
+          "media_type": "photo",
+          "bbox": [120, 80, 240, 260],
+          "timestamp": null,
+          "face_idx": 0
+        },
+        {
+          "id": "e0b82df2-cc05-4c07-b649-11c5e933cbdd",
+          "media_source_id": "2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
+          "filename": "video1.mp4",
+          "filepath": "storage/media_sources/video1.mp4",
+          "media_type": "video",
+          "bbox": [122, 82, 242, 262],
+          "timestamp": 45.5,
+          "face_idx": 1
+        }
+      ]
+    }
+  ]
 }
 ```

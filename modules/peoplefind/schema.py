@@ -13,6 +13,7 @@ class MediaSourceResponse(MediaSourceBase):
     filepath: str
     status: str
     created_at: datetime
+    unique_faces_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -69,5 +70,58 @@ class SearchSessionHistoryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# --- UNIQUE FACES RESPONSE ---
+class FaceOccurrence(BaseModel):
+    id: UUID
+    bbox: List[int]
+    timestamp: Optional[float] = None
+    face_idx: int
+
+    class Config:
+        from_attributes = True
+
+
+class UniqueFaceResponse(BaseModel):
+    cluster_id: int
+    representative_face_id: UUID
+    bbox: List[int]
+    timestamp: Optional[float] = None
+    total_occurrences: int
+    occurrences: List[FaceOccurrence]
+
+    class Config:
+        from_attributes = True
+
+
+# --- TENANT-WIDE UNIQUE FACES GALLERY RESPONSE ---
+class UniqueFaceOccurrence(BaseModel):
+    id: UUID
+    media_source_id: UUID
+    filename: str
+    filepath: str
+    media_type: str
+    bbox: List[int]
+    timestamp: Optional[float] = None
+    face_idx: int
+
+    class Config:
+        from_attributes = True
+
+
+class TenantUniqueFaceResponse(BaseModel):
+    cluster_id: int
+    representative_face_id: UUID
+    representative_media_source_id: UUID
+    representative_filepath: str
+    bbox: List[int]
+    timestamp: Optional[float] = None
+    total_occurrences: int
+    occurrences: List[UniqueFaceOccurrence]
+
+    class Config:
+        from_attributes = True
+
 
 

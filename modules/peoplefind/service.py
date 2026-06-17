@@ -367,6 +367,71 @@ class PeopleFindService:
         await self.db.commit()
         return len(filepaths)
 
+    async def get_tenant_unique_faces(
+        self, tenant_id: uuid.UUID, threshold: float = 0.45
+    ) -> List[dict]:
+        """
+        Retrieves all active face embeddings for a tenant, clusters them using face_rec_service,
+        and returns a list of unique face groups with representative details and occurrences.
+        """
+        faces = await self.repo.get_all_faces_for_tenant(tenant_id)
+        if not faces:
+            return []
+            
+        # Convert SQLAlchemy models to standard Python dicts for generic clustering
+        face_dicts = []
+        for f in faces:
+            media = f.media_source
+            face_dicts.append({
+                "id": f.id,
+                "embedding": f.embedding,
+                "bbox": f.bbox,
+                "timestamp": f.timestamp,
+                "face_idx": f.face_idx,
+                "metadata": {
+                    "media_source_id": f.media_source_id,
+                    "filename": media.filename if media else "",
+                    "filepath": media.filepath if media else "",
+                    "media_type": media.media_type if media else ""
+                }
+            })
+            
+        # Call the reusable face clustering service
+        clusters = face_rec_service.cluster_faces(face_dicts, threshold)
+        
+        # Map back to the expected API response format
+        unique_faces = []
+        for c in clusters:
+            rep = c["representative"]
+            meta_rep = rep["metadata"]
+            
+            occurrences = []
+            for occ in c["occurrences"]:
+                meta_occ = occ["metadata"]
+                occurrences.append({
+                    "id": occ["id"],
+                    "media_source_id": meta_occ["media_source_id"],
+                    "filename": meta_occ["filename"],
+                    "filepath": meta_occ["filepath"],
+                    "media_type": meta_occ["media_type"],
+                    "bbox": occ["bbox"],
+                    "timestamp": occ["timestamp"],
+                    "face_idx": occ["face_idx"]
+                })
+                
+            unique_faces.append({
+                "cluster_id": c["cluster_id"],
+                "representative_face_id": rep["id"],
+                "representative_media_source_id": meta_rep["media_source_id"],
+                "representative_filepath": meta_rep["filepath"],
+                "bbox": rep["bbox"],
+                "timestamp": rep["timestamp"],
+                "total_occurrences": c["total_occurrences"],
+                "occurrences": occurrences
+            })
+            
+        return unique_faces
+
     @classmethod
     async def migrate_existing_heic(cls):
         """

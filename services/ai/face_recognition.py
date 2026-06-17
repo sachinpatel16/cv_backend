@@ -175,6 +175,71 @@ class FaceRecognitionService:
                         "scale": scale
                     }
 
+    def cluster_faces(self, faces: list[dict], threshold: float = 0.45) -> list[dict]:
+        """
+        Clusters a list of face objects based on their embeddings using DBSCAN.
+        
+        Args:
+            faces: list of dicts, each must contain:
+                "id": Any unique identifier
+                "embedding": list or np.ndarray (512 dimensions)
+                "bbox": list of 4 ints
+                "timestamp": float or None
+                "face_idx": int
+                optional key "metadata": dict (e.g., filename, filepath, media_type, etc.)
+            threshold: similarity threshold for grouping faces (default 0.45)
+            
+        Returns:
+            list of dicts, each representing a unique face cluster:
+                "cluster_id": int
+                "representative": dict (the face dictionary with largest bbox area)
+                "total_occurrences": int
+                "occurrences": list of face dicts in this cluster (sorted)
+        """
+        if not faces:
+            return []
+
+        from sklearn.cluster import DBSCAN
+        import numpy as np
+
+        embeddings = np.array([f["embedding"] for f in faces])
+        eps = 1.0 - threshold
+
+        clustering = DBSCAN(eps=eps, min_samples=1, metric="cosine").fit(embeddings)
+        labels = clustering.labels_
+
+        cluster_groups = {}
+        for idx, label in enumerate(labels):
+            if label not in cluster_groups:
+                cluster_groups[label] = []
+            cluster_groups[label].append(faces[idx])
+
+        unique_faces = []
+        for label, group in cluster_groups.items():
+            # Pick representative face: largest bbox area
+            representative = max(group, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+            
+            # Sort occurrences: filename metadata first (if available), then timestamp or face_idx
+            def sort_key(f):
+                meta = f.get("metadata", {})
+                filename = meta.get("filename", "")
+                ts = f["timestamp"] if f["timestamp"] is not None else f["face_idx"]
+                return (filename, ts)
+
+            sorted_group = sorted(group, key=sort_key)
+
+            unique_faces.append({
+                "cluster_id": int(label),
+                "representative": representative,
+                "total_occurrences": len(group),
+                "occurrences": sorted_group
+            })
+
+        # Sort the overall unique faces list by total occurrences descending
+        unique_faces.sort(key=lambda x: x["total_occurrences"], reverse=True)
+        return unique_faces
+
+
 
 # Singleton instance for application-wide reuse
 face_rec_service = FaceRecognitionService()
