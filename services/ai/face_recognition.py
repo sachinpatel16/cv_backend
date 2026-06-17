@@ -81,5 +81,101 @@ class FaceRecognitionService:
             
         return results
 
+    def load_search_embeddings(self, selfie_path: str | None, fallback_embedding: list[float], model_name: str = "buffalo_l") -> list[np.ndarray]:
+        """
+        Loads all face embeddings from the reference selfie image file if it exists,
+        otherwise falls back to the database-stored embedding.
+        """
+        import os
+        group_embeddings = []
+        if selfie_path and os.path.exists(selfie_path):
+            try:
+                with open(selfie_path, "rb") as sf:
+                    selfie_content = sf.read()
+                selfie_faces = self.extract_faces(selfie_content, model_name=model_name)
+                group_embeddings = [np.array(face["embedding"]) for face in selfie_faces]
+            except Exception as e:
+                print(f"Failed to extract group faces from {selfie_path}: {e}")
+
+        if not group_embeddings:
+            group_embeddings = [np.array(fallback_embedding)]
+        return group_embeddings
+
+    def extract_faces_from_video(self, video_path: str, interval: float = 1.0, model_name: str = "buffalo_l"):
+        """
+        Generator that processes a video frame-by-frame at given interval,
+        detecting and yielding all faces found in the video.
+        """
+        from services.camera_processors.video_service import VideoFrameExtractor
+        
+        extractor = VideoFrameExtractor(video_path, interval_seconds=interval)
+        for frame_small, frame, sec, scale in extractor.extract_frames():
+            # Encode frame to bytes for face recognition service
+            _, encoded_img = cv2.imencode(".jpg", frame_small)
+            frame_bytes = encoded_img.tobytes()
+
+            # Detect faces
+            faces = self.extract_faces(frame_bytes, model_name=model_name)
+            for face in faces:
+                # Restore coordinates back to original full resolution
+                orig_bbox = [
+                    int(face["bbox"][0] / scale),
+                    int(face["bbox"][1] / scale),
+                    int(face["bbox"][2] / scale),
+                    int(face["bbox"][3] / scale)
+                ]
+                yield {
+                    "bbox": orig_bbox,
+                    "embedding": face["embedding"],
+                    "timestamp": sec
+                }
+
+    def search_face_in_video(
+        self,
+        video_path: str,
+        target_embeddings: list[np.ndarray],
+        threshold: float,
+        interval: float = 1.0,
+        model_name: str = "buffalo_l"
+    ):
+        """
+        Generator that processes a video frame-by-frame at given interval, 
+        detecting and matching faces against target reference embeddings.
+        Yields dicts with match details.
+        """
+        from services.camera_processors.video_service import VideoFrameExtractor
+        from services.ai.math_utils import find_best_face_match
+        
+        extractor = VideoFrameExtractor(video_path, interval_seconds=interval)
+        for frame_small, frame, sec, scale in extractor.extract_frames():
+            h_orig, w_orig = frame.shape[:2]
+
+            # Encode frame to bytes for face recognition service
+            _, encoded_img = cv2.imencode(".jpg", frame_small)
+            frame_bytes = encoded_img.tobytes()
+
+            # Extract face embeddings
+            faces = self.extract_faces(frame_bytes, model_name=model_name)
+
+            if len(faces) > 0:
+                best_face, best_sim = find_best_face_match(target_embeddings, faces, threshold)
+                if best_face is not None:
+                    # Restore coordinates back to original video size
+                    x1 = max(0, min(int(best_face["bbox"][0] / scale), w_orig - 1))
+                    y1 = max(0, min(int(best_face["bbox"][1] / scale), h_orig - 1))
+                    x2 = max(0, min(int(best_face["bbox"][2] / scale), w_orig - 1))
+                    y2 = max(0, min(int(best_face["bbox"][3] / scale), h_orig - 1))
+                    orig_bbox = [x1, y1, x2, y2]
+
+                    yield {
+                        "timestamp": sec,
+                        "frame": frame,
+                        "bbox": orig_bbox,
+                        "similarity": best_sim,
+                        "scale": scale
+                    }
+
+
 # Singleton instance for application-wide reuse
 face_rec_service = FaceRecognitionService()
+
