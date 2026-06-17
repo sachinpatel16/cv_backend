@@ -1,3 +1,11 @@
+import os
+import sys
+
+# Ensure project root is on sys.path so 'shared', 'modules', 'configs', 'services' are importable
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from celery import Celery
 from configs.base import settings
 
@@ -13,5 +21,5 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-    imports=["workers.tasks"]
+    imports=["modules.peoplefind.tasks"]
 )

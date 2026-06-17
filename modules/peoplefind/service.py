@@ -1,6 +1,5 @@
 import os
 import uuid
-import cv2
 from typing import List, Tuple, Optional
 from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.peoplefind.repository import PeopleFindRepository
 from modules.peoplefind.model import MediaSource, FaceSearchSession, FaceSearchResult
 from services.ai.face_recognition import face_rec_service
+from shared.utils.image import convert_and_save_image
+
 
 MEDIA_SOURCES_DIR = os.path.join("storage", "media_sources")
 SELFIES_DIR = os.path.join("storage", "selfies")
@@ -47,33 +48,13 @@ class PeopleFindService:
                     await self.db.flush()
 
             # Save media file locally
-            file_ext = os.path.splitext(file.filename)[1].lower()
-            unique_name = f"{uuid.uuid4()}{file_ext}"
-            
             content = await file.read()
-            
-            # Convert HEIC/HEIF photos to JPG for standard browser rendering
-            if media_type == "photo" and file_ext in {".heic", ".heif"}:
-                try:
-                    import io
-                    from PIL import Image
-                    import pillow_heif
-                    pillow_heif.register_heif_opener()
-                    
-                    image = Image.open(io.BytesIO(content))
-                    if image.mode != "RGB":
-                        image = image.convert("RGB")
-                    
-                    file_ext = ".jpg"
-                    unique_name = f"{uuid.uuid4()}{file_ext}"
-                    filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
-                    image.save(filepath, "JPEG", quality=90)
-                except Exception as e:
-                    print(f"HEIC conversion failed, falling back to original: {str(e)}")
-                    filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
-                    with open(filepath, "wb") as f:
-                        f.write(content)
+            if media_type == "photo":
+                filepath = convert_and_save_image(content, file.filename, MEDIA_SOURCES_DIR)
+                unique_name = os.path.basename(filepath)
             else:
+                file_ext = os.path.splitext(file.filename)[1].lower()
+                unique_name = f"{uuid.uuid4()}{file_ext}"
                 filepath = os.path.join(MEDIA_SOURCES_DIR, unique_name)
                 with open(filepath, "wb") as f:
                     f.write(content)
@@ -94,7 +75,7 @@ class PeopleFindService:
                     await self.repo.update_media_source_status(media.id, "processing")
                     await self.db.commit()
                     
-                    from workers.tasks import index_photo_task
+                    from modules.peoplefind.tasks import index_photo_task
                     index_photo_task.delay(str(media.id), filepath)
                 
                 elif media_type == "video":
@@ -102,7 +83,7 @@ class PeopleFindService:
                     await self.repo.update_media_source_status(media.id, "processing")
                     await self.db.commit()
                     
-                    from workers.tasks import index_video_task
+                    from modules.peoplefind.tasks import index_video_task
                     index_video_task.delay(str(media.id), filepath)
                     
             except Exception as e:
@@ -139,36 +120,8 @@ class PeopleFindService:
             )
 
         # Save reference selfie image
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        unique_name = f"{uuid.uuid4()}{file_ext}"
-        
         content = await file.read()
-        
-        # Convert HEIC/HEIF selfies to JPG for standard compatibility
-        if file_ext in {".heic", ".heif"}:
-            try:
-                import io
-                from PIL import Image
-                import pillow_heif
-                pillow_heif.register_heif_opener()
-                
-                image = Image.open(io.BytesIO(content))
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                
-                file_ext = ".jpg"
-                unique_name = f"{uuid.uuid4()}{file_ext}"
-                selfie_path = os.path.join(SELFIES_DIR, unique_name)
-                image.save(selfie_path, "JPEG", quality=90)
-            except Exception as e:
-                print(f"HEIC selfie conversion failed, falling back: {str(e)}")
-                selfie_path = os.path.join(SELFIES_DIR, unique_name)
-                with open(selfie_path, "wb") as f:
-                    f.write(content)
-        else:
-            selfie_path = os.path.join(SELFIES_DIR, unique_name)
-            with open(selfie_path, "wb") as f:
-                f.write(content)
+        selfie_path = convert_and_save_image(content, file.filename, SELFIES_DIR)
 
         # Extract selfie face embedding
         try:
@@ -199,7 +152,7 @@ class PeopleFindService:
         await self.db.commit()
 
         # Trigger on-demand video search Celery task
-        from workers.tasks import process_video_search_task
+        from modules.peoplefind.tasks import process_video_search_task
         process_video_search_task.delay(
             str(video_id),
             str(session.id),
@@ -247,75 +200,29 @@ class PeopleFindService:
         Helper method that processes a video, extracts frames at intervals, 
         and indexes faces into the database with timestamps.
         """
-        cap = cv2.VideoCapture(filepath)
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video file: {filepath}")
+        if not os.path.exists(filepath):
+            await self.repo.update_media_source_status(media_id, "failed")
+            await self.db.commit()
+            return
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0:
-            fps = 30.0
+        try:
+            face_count = 0
+            for face in face_rec_service.extract_faces_from_video(filepath, interval):
+                await self.repo.create_face_embedding(
+                    media_source_id=media_id,
+                    face_idx=face_count,
+                    bbox=face["bbox"],
+                    embedding=face["embedding"],
+                    timestamp=face["timestamp"]
+                )
+                face_count += 1
 
-        frame_step = max(1, int(fps * interval))
-        f_idx = 0
-        face_count = 0
-
-        while True:
-            if f_idx % frame_step == 0:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    break
-
-                # Downscale for CPU optimization (matches reference step3_video.py logic)
-                h, w = frame.shape[:2]
-                max_dim = 640
-                if max(h, w) > max_dim:
-                    scale = max_dim / max(h, w)
-                    frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
-                else:
-                    scale = 1.0
-
-                # Encode frame to bytes for face recognition service
-                _, encoded_img = cv2.imencode(".jpg", frame)
-                frame_bytes = encoded_img.tobytes()
-
-                # Detect faces
-                faces = face_rec_service.extract_faces(frame_bytes)
-                sec = f_idx / fps
-
-                for face in faces:
-                    # Restore coordinates back to original full resolution
-                    orig_bbox = [
-                        int(face["bbox"][0] / scale),
-                        int(face["bbox"][1] / scale),
-                        int(face["bbox"][2] / scale),
-                        int(face["bbox"][3] / scale)
-                    ]
-                    
-                    await self.repo.create_face_embedding(
-                        media_source_id=media_id,
-                        face_idx=face_count,
-                        bbox=orig_bbox,
-                        embedding=face["embedding"],
-                        timestamp=sec
-                    )
-                    face_count += 1
-                
-                # Skip frames sequentially by calling cap.grab()
-                for _ in range(frame_step - 1):
-                    ret = cap.grab()
-                    if not ret:
-                        break
-                    f_idx += 1
-            else:
-                ret = cap.grab()
-                if not ret:
-                    break
-            
-            f_idx += 1
-
-        cap.release()
-        await self.repo.update_media_source_status(media_id, "completed")
-        await self.db.commit()
+            await self.repo.update_media_source_status(media_id, "completed")
+            await self.db.commit()
+        except Exception as e:
+            await self.repo.update_media_source_status(media_id, "failed")
+            await self.db.commit()
+            raise e
 
     async def search_by_selfie(
         self, file: UploadFile, threshold: float, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None
@@ -325,36 +232,8 @@ class PeopleFindService:
         across indexed tenant faces, and generates search results.
         """
         # Save reference selfie image
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        unique_name = f"{uuid.uuid4()}{file_ext}"
-        
         content = await file.read()
-        
-        # Convert HEIC/HEIF selfies to JPG for standard compatibility
-        if file_ext in {".heic", ".heif"}:
-            try:
-                import io
-                from PIL import Image
-                import pillow_heif
-                pillow_heif.register_heif_opener()
-                
-                image = Image.open(io.BytesIO(content))
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                
-                file_ext = ".jpg"
-                unique_name = f"{uuid.uuid4()}{file_ext}"
-                selfie_path = os.path.join(SELFIES_DIR, unique_name)
-                image.save(selfie_path, "JPEG", quality=90)
-            except Exception as e:
-                print(f"HEIC selfie conversion failed, falling back: {str(e)}")
-                selfie_path = os.path.join(SELFIES_DIR, unique_name)
-                with open(selfie_path, "wb") as f:
-                    f.write(content)
-        else:
-            selfie_path = os.path.join(SELFIES_DIR, unique_name)
-            with open(selfie_path, "wb") as f:
-                f.write(content)
+        selfie_path = convert_and_save_image(content, file.filename, SELFIES_DIR)
 
         # Extract selfie faces
         try:
