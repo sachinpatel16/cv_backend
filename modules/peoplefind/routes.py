@@ -13,7 +13,8 @@ from modules.peoplefind.schema import (
     MediaSourceResponse,
     SearchSessionResponse,
     SearchResultResponse,
-    SearchSessionHistoryResponse
+    SearchSessionHistoryResponse,
+    TenantUniqueFaceResponse
 )
 
 router = APIRouter(prefix="/peoplefind", tags=["People Search & Face Recognition"])
@@ -98,6 +99,31 @@ async def list_event_media(
         message=f"Retrieved {len(media_data)} media sources.",
         status=status.HTTP_200_OK,
         data=media_data
+    )
+
+@router.get(
+    "/unique-faces",
+    response_model=StandardResponse[List[TenantUniqueFaceResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def get_tenant_unique_faces_gallery(
+    threshold: float = 0.45,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves and clusters all face detections across all media files (photos/videos) scoped to your tenant.
+    Returns a gallery of unique identities (people) and the list of media items where they appear.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = PeopleFindService(db)
+    
+    unique_faces = await service.get_tenant_unique_faces(tenant_id, threshold)
+    
+    return StandardResponse(
+        message=f"Retrieved {len(unique_faces)} unique face(s) across all tenant media.",
+        status=status.HTTP_200_OK,
+        data=unique_faces
     )
 
 @router.post(

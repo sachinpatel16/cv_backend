@@ -241,6 +241,39 @@ class PeopleFindRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_faces_by_media_id(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> List[FaceEmbedding]:
+        """Fetch all face embeddings of a media source, scoped to tenant."""
+        stmt = (
+            select(FaceEmbedding)
+            .join(MediaSource, FaceEmbedding.media_source_id == MediaSource.id)
+            .where(
+                FaceEmbedding.media_source_id == media_id,
+                MediaSource.tenant_id == tenant_id,
+                MediaSource.is_delete == False,
+                FaceEmbedding.is_delete == False
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all_faces_for_tenant(self, tenant_id: uuid.UUID) -> List[FaceEmbedding]:
+        """Fetch all face embeddings of all media sources scoped to a tenant, with media sources eagerly loaded."""
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(FaceEmbedding)
+            .join(MediaSource, FaceEmbedding.media_source_id == MediaSource.id)
+            .options(selectinload(FaceEmbedding.media_source))
+            .where(
+                MediaSource.tenant_id == tenant_id,
+                MediaSource.is_delete == False,
+                FaceEmbedding.is_delete == False
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+
+
 
 
     async def bulk_delete_media_sources(self, tenant_id: uuid.UUID) -> List[str]:
