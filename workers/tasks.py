@@ -4,6 +4,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 import cv2
+cv2.setNumThreads(0)
+import torch
+torch.set_num_threads(1)
 import asyncio
 import numpy as np
 from sqlalchemy import select
@@ -516,3 +519,438 @@ def index_peoplecount_task(
                 await db.commit()
                 
     run_async(run())
+
+
+@celery_app.task(name="workers.tasks.index_objectcount_task")
+def index_objectcount_task(
+    media_source_id_str: str,
+    filepath: str,
+    media_type: str,
+    configs: dict
+):
+    """
+    Celery task to run YOLO + BoT-SORT to detect, track, and count general objects in media.
+    """
+    media_id = uuid.UUID(media_source_id_str)
+    
+    async def run():
+        async with SessionLocal() as db:
+            from modules.objectcount.repository import ObjectCountRepository
+            from modules.objectcount.tracker import BoTSORTTracker, STrack
+            from modules.objectcount.gender_classifier import InsightFaceGenderClassifier
+            from modules.peoplecount.reid_model import ReIDExtractor
+            from ultralytics import YOLO
+            import torch
+            
+            repo = ObjectCountRepository(db)
+            
+            # Load weights
+            weights_path = os.path.join("storage", "yolo26n.pt")
+            if not os.path.exists(weights_path):
+                weights_path = "yolov8n.pt"
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model = YOLO(weights_path)
+            model.to(device)
+            
+            # Initialize Re-ID Appearance Feature Extractor
+            reid_extractor = None
+            if configs.get("use_reid", True):
+                try:
+                    reid_extractor = ReIDExtractor(device=device)
+                except Exception as e:
+                    logger.error(f"Failed to initialize Re-ID Extractor: {e}. Falling back to spatial tracking.")
+                    reid_extractor = None
+
+            # Initialize Gender Classifier
+            gender_classifier = None
+            if configs.get("classify_gender", False):
+                try:
+                    gender_classifier = InsightFaceGenderClassifier(
+                        model_path="storage/models/insightface/genderage.onnx"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to initialize InsightFace Gender Classifier: {e}. Gender classification will be disabled.")
+                    gender_classifier = None
+
+            # Reset BoT-SORT static ID counter
+            STrack.reset_id_counter()
+
+            # Global Motion Compensation (GMC)
+            gmc = None
+            gmc_method = configs.get("gmc_method", "sparseOptFlow")
+            if gmc_method and gmc_method.lower() != "none":
+                try:
+                    from ultralytics.trackers.utils.gmc import GMC
+                    gmc = GMC(method=gmc_method)
+                except Exception as e:
+                    logger.error(f"Failed to initialize GMC: {e}. Camera motion compensation will be disabled.")
+                    gmc = None
+
+            confidence_threshold = configs.get("confidence_threshold", 0.35)
+            min_track_frames = configs.get("min_track_frames", 100)
+            track_buffer = configs.get("track_buffer", 150)
+            classes_to_track = configs.get("classes_to_track")
+            classify_vehicle = configs.get("classify_vehicle", False)
+            classify_gender = configs.get("classify_gender", False)
+
+            if media_type == "photo":
+                # Process photo
+                frame = cv2.imread(filepath)
+                if frame is None:
+                    await repo.update_media_status(media_id, "failed")
+                    await db.commit()
+                    return
+                
+                # YOLO detection
+                results = model(frame, conf=confidence_threshold, iou=0.5, device=device, verbose=False)
+                
+                detected_counts = {}
+                total_detected = 0
+                
+                vehicle_classes = {"car", "bus", "truck", "motorcycle", "bicycle"}
+                
+                if results:
+                    result = results[0]
+                    boxes = result.boxes
+                    for box in boxes:
+                        cls_id = int(box.cls[0].item())
+                        class_name = model.names.get(cls_id, "unknown")
+                        
+                        if classes_to_track and class_name not in classes_to_track:
+                            continue
+                            
+                        if not classify_vehicle and class_name in vehicle_classes:
+                            class_name = "vehicle"
+                            
+                        detected_counts[class_name] = detected_counts.get(class_name, 0) + 1
+                        total_detected += 1
+                        
+                report_summary = {
+                    "total_unique_objects": total_detected,
+                    "peak_objects_count": total_detected,
+                    "average_objects_count": float(total_detected),
+                    "unique_counts": detected_counts,
+                    "gender_breakdown": {
+                        "male": 0,
+                        "female": 0,
+                        "unknown": 0
+                    }
+                }
+                
+                # Update DB
+                await repo.update_media_results(
+                    media_id=media_id,
+                    status="completed",
+                    total_objects_count=total_detected,
+                    peak_objects_count=total_detected,
+                    average_objects_count=float(total_detected),
+                    video_duration_seconds=0.0,
+                    processed_filepath=None,
+                    classify_gender=classify_gender,
+                    classify_vehicle=classify_vehicle,
+                    classes_to_track=classes_to_track,
+                    report_summary=report_summary
+                )
+                await db.commit()
+                
+            elif media_type == "video":
+                # Process video
+                cap = cv2.VideoCapture(filepath)
+                if not cap.isOpened():
+                    await repo.update_media_status(media_id, "failed")
+                    await db.commit()
+                    return
+                
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps <= 0:
+                    fps = 30.0
+                
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                logger.info(f"Processing video: {width}x{height} @ {fps} fps, total {total_frames} frames.")
+                
+                # Output video setup
+                out_filename = f"processed_{media_id}.mp4"
+                processed_filepath = os.path.join("storage", "objectcount_outputs", out_filename)
+                
+                # Use mp4v codec
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(processed_filepath, fourcc, fps, (width, height))
+                
+                # Trackers cache class-wise
+                trackers = {}
+                
+                # Track statistics
+                tracks_history = {}
+                frame_objects_counts = []
+                frame_idx = 0
+                
+                CLASS_COLORS = {
+                    "person": (0, 255, 0),       # Green
+                    "vehicle": (255, 0, 0),      # Blue
+                    "car": (255, 0, 0),          # Blue
+                    "bus": (255, 255, 0),        # Cyan
+                    "truck": (255, 0, 255),      # Magenta
+                    "motorcycle": (0, 165, 255), # Orange
+                    "bicycle": (0, 255, 255),    # Yellow
+                }
+                
+                vehicle_classes = {"car", "bus", "truck", "motorcycle", "bicycle"}
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        break
+                    
+                    if frame_idx % 10 == 0:
+                        logger.info(f"Processing frame {frame_idx}/{total_frames}...")
+                    
+                    results = model(frame, conf=0.10, iou=0.5, device=device, verbose=False)
+                    detections = []
+                    
+                    if results:
+                        result = results[0]
+                        boxes = result.boxes
+                        for box in boxes:
+                            cls_id = int(box.cls[0].item())
+                            class_name = model.names.get(cls_id, "unknown")
+                            
+                            if classes_to_track and class_name not in classes_to_track:
+                                continue
+                                
+                            if not classify_vehicle and class_name in vehicle_classes:
+                                class_name = "vehicle"
+                                
+                            conf = float(box.conf[0].item())
+                            xyxy = box.xyxy[0].cpu().numpy().tolist()
+                            detections.append({
+                                "box": xyxy,
+                                "confidence": conf,
+                                "class_name": class_name
+                            })
+                            
+                    # GMC warp matrix
+                    H = np.eye(2, 3)
+                    if gmc is not None:
+                        try:
+                            gmc_dets = np.array([d["box"] for d in detections]) if detections else None
+                            H = gmc.apply(frame, gmc_dets)
+                        except Exception as e:
+                            logger.error(f"Error computing GMC: {e}")
+                            H = np.eye(2, 3)
+
+                    # Extract Re-ID appearance features
+                    is_reid_frame = (frame_idx % 1 == 0)
+                    if reid_extractor and detections and is_reid_frame:
+                        crops = []
+                        valid_indices = []
+                        h_f, w_f, _ = frame.shape
+                        for idx, det in enumerate(detections):
+                            x1, y1, x2, y2 = map(int, det["box"])
+                            x1 = max(0, min(x1, w_f - 1))
+                            y1 = max(0, min(y1, h_f - 1))
+                            x2 = max(0, min(x2, w_f - 1))
+                            y2 = max(0, min(y2, h_f - 1))
+                            
+                            if (x2 - x1) > 0 and (y2 - y1) > 0:
+                                crops.append(frame[y1:y2, x1:x2])
+                                valid_indices.append(idx)
+                            else:
+                                det["feature"] = None
+                                
+                        if crops:
+                            try:
+                                features = reid_extractor.extract(crops)
+                                for f_idx, det_idx in enumerate(valid_indices):
+                                    detections[det_idx]["feature"] = features[f_idx]
+                            except Exception as e:
+                                logger.error(f"Error during Re-ID extraction: {e}")
+                                for det_idx in valid_indices:
+                                    detections[det_idx]["feature"] = None
+                    else:
+                        for det in detections:
+                            if "feature" not in det:
+                                det["feature"] = None
+
+                    # Class-wise update of BoT-SORT trackers
+                    frame_tracks = []
+                    present_classes = set(d["class_name"] for d in detections)
+                    active_trackers = set(trackers.keys())
+                    all_classes_to_update = present_classes.union(active_trackers)
+                    
+                    for class_name in all_classes_to_update:
+                        if class_name not in trackers:
+                            trackers[class_name] = BoTSORTTracker(
+                                track_thresh=confidence_threshold,
+                                match_thresh=0.8,
+                                track_buffer=track_buffer,
+                                reid_alpha=0.5,
+                                reid_max_dist=0.55
+                            )
+                        class_dets = [d for d in detections if d["class_name"] == class_name]
+                        active_tracks = trackers[class_name].update(class_dets, H, class_name)
+                        frame_tracks.extend(active_tracks)
+
+                    # Dynamic Gender Classification
+                    if gender_classifier and frame_tracks:
+                        h_f, w_f, _ = frame.shape
+                        for track in frame_tracks:
+                            if track.class_name == "person":
+                                if track.visible_frames >= 30 and len(track.gender_history) < 10:
+                                    if track.visible_frames % 3 == 0:
+                                        box = track.tlbr
+                                        if box is not None:
+                                            x1, y1, x2, y2 = map(int, box)
+                                            x1 = max(0, min(x1, w_f - 1))
+                                            y1 = max(0, min(y1, h_f - 1))
+                                            x2 = max(0, min(x2, w_f - 1))
+                                            y2 = max(0, min(y2, h_f - 1))
+                                            
+                                            box_h = y2 - y1
+                                            if (x2 - x1) > 0 and box_h > 0:
+                                                head_y2 = y1 + int(box_h * 0.25)
+                                                head_y2 = max(y1 + 1, min(head_y2, y2))
+                                                head_crop = frame[y1:head_y2, x1:x2]
+                                                
+                                                gender_res = gender_classifier.predict(head_crop)
+                                                track.gender_history.append((gender_res["gender"], gender_res["confidence"]))
+                                                genders = [g for g, c in track.gender_history]
+                                                from collections import Counter
+                                                track.gender = Counter(genders).most_common(1)[0][0]
+                                                matching_confs = [c for g, c in track.gender_history if g == track.gender]
+                                                track.gender_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
+
+                    # Accumulate frame counts and track histories
+                    frame_objects_counts.append(len(frame_tracks))
+                    for track in frame_tracks:
+                        tid = track.track_id
+                        g_lbl = getattr(track, "gender", None)
+                        
+                        if tid not in tracks_history:
+                            tracks_history[tid] = {
+                                "class_name": track.class_name,
+                                "gender": g_lbl,
+                                "first_frame": frame_idx,
+                                "last_frame": frame_idx,
+                                "total_frames": 1
+                            }
+                        else:
+                            tracks_history[tid]["last_frame"] = frame_idx
+                            tracks_history[tid]["total_frames"] += 1
+                            if g_lbl:
+                                tracks_history[tid]["gender"] = g_lbl
+                                
+                        # Visual drawing
+                        x1, y1, x2, y2 = [int(v) for v in track.tlbr]
+                        color = CLASS_COLORS.get(track.class_name, (200, 200, 200))
+                        
+                        # Draw bounding box
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                        
+                        # Label construction
+                        label = f"{track.class_name.capitalize()} #{tid}"
+                        if track.class_name == "person" and g_lbl:
+                            label += f" ({g_lbl})"
+                            
+                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                    # Compute live counts for HUD
+                    live_counts = {}
+                    for track in frame_tracks:
+                        cname = track.class_name
+                        live_counts[cname] = live_counts.get(cname, 0) + 1
+                        
+                    unique_counts_live = {}
+                    for tid, info in tracks_history.items():
+                        if info["total_frames"] >= min_track_frames:
+                            cname = info["class_name"]
+                            unique_counts_live[cname] = unique_counts_live.get(cname, 0) + 1
+
+                    # Overlay HUD Dashboard
+                    hud_y = 30
+                    for cname, u_cnt in sorted(unique_counts_live.items()):
+                        l_cnt = live_counts.get(cname, 0)
+                        hud_text = f"Unique {cname.capitalize()}: {u_cnt} | Live: {l_cnt}"
+                        cv2.putText(frame, hud_text, (20, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                        hud_y += 25
+
+                    writer.write(frame)
+                    frame_idx += 1
+                    
+                cap.release()
+                writer.release()
+                
+                # Apply noise filter to get final results
+                filtered_tracks = {tid: info for tid, info in tracks_history.items() if info["total_frames"] >= min_track_frames}
+                
+                # Calculate aggregated metrics
+                total_unique_objects = len(filtered_tracks)
+                peak_objects = max(frame_objects_counts) if frame_objects_counts else 0
+                avg_objects = sum(frame_objects_counts) / len(frame_objects_counts) if frame_objects_counts else 0.0
+                video_duration = frame_idx / fps if fps > 0 else 0.0
+                
+                unique_counts = {}
+                male_count = 0
+                female_count = 0
+                unknown_count = 0
+                
+                for tid, info in filtered_tracks.items():
+                    cname = info["class_name"]
+                    unique_counts[cname] = unique_counts.get(cname, 0) + 1
+                    
+                    if cname == "person":
+                        g_lbl = info.get("gender")
+                        if g_lbl == "Male":
+                            male_count += 1
+                        elif g_lbl == "Female":
+                            female_count += 1
+                        else:
+                            unknown_count += 1
+                            
+                    # Save details in database ObjectCountResult table
+                    start_time = info["first_frame"] / fps if fps > 0 else 0.0
+                    end_time = info["last_frame"] / fps if fps > 0 else 0.0
+                    await repo.create_result(
+                        media_id=media_id,
+                        track_id=tid,
+                        class_name=cname,
+                        gender=info.get("gender"),
+                        first_frame=info["first_frame"],
+                        last_frame=info["last_frame"],
+                        total_frames=info["total_frames"],
+                        start_time=start_time,
+                        end_time=end_time
+                    )
+                    
+                report_summary = {
+                    "total_unique_objects": total_unique_objects,
+                    "peak_objects_count": peak_objects,
+                    "average_objects_count": avg_objects,
+                    "unique_counts": unique_counts,
+                    "gender_breakdown": {
+                        "male": male_count,
+                        "female": female_count,
+                        "unknown": unknown_count
+                    }
+                }
+                
+                # Update media details
+                await repo.update_media_results(
+                    media_id=media_id,
+                    status="completed",
+                    total_objects_count=total_unique_objects,
+                    peak_objects_count=peak_objects,
+                    average_objects_count=avg_objects,
+                    video_duration_seconds=video_duration,
+                    processed_filepath=processed_filepath,
+                    classify_gender=classify_gender,
+                    classify_vehicle=classify_vehicle,
+                    classes_to_track=classes_to_track,
+                    report_summary=report_summary
+                )
+                await db.commit()
+                
+    run_async(run())
+
