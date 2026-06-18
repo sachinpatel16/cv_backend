@@ -35,6 +35,7 @@ class ObjectCountMediaResponse(BaseModel):
     average_objects_count: Optional[float] = None
     video_duration_seconds: Optional[float] = None
     report_summary: Optional[Dict] = None
+    progress_percentage: int = 0
     created_at: datetime
 
     class Config:
@@ -52,3 +53,5 @@ class ObjectCountAnalyzeRequest(BaseModel):
     confidence_threshold: float = 0.35
     min_track_frames: int = 100
     track_buffer: int = 150
+    entry_exit_report: bool = False
+    line_coords: Optional[List[List[int]]] = None

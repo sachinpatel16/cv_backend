@@ -56,6 +56,16 @@ def group_timestamps(seconds_list: list, max_gap: float) -> list:
     intervals.append((start, prev))
     return intervals
 
+def check_segment_intersection(p1, p2, q1, q2):
+    """
+    Checks if segment p1p2 intersects with segment q1q2.
+    """
+    def ccw(A, B, C):
+        return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+        
+    return ccw(p1, q1, q2) != ccw(p2, q1, q2) and ccw(p1, p2, q1) != ccw(p1, p2, q2)
+
+
 def draw_bbox_on_image(img, bbox, similarity, timestamp_str):
     """Draws a green bounding box and match details on the frame."""
     vis = img.copy()
@@ -687,6 +697,25 @@ def index_objectcount_task(
                 frame_objects_counts = []
                 frame_idx = 0
                 
+                # Line crossing variables
+                entry_exit_report = configs.get("entry_exit_report", False)
+                line_coords_raw = configs.get("line_coords")
+                line_coords = None
+                line_crossing_entries = 0
+                line_crossing_exits = 0
+                line_crossing_class_counts = {}
+
+                if entry_exit_report:
+                    if line_coords_raw and len(line_coords_raw) == 2:
+                        try:
+                            line_coords = [tuple(map(int, p)) for p in line_coords_raw]
+                        except Exception as e:
+                            logger.error(f"Failed to parse line_coords: {e}")
+                            line_coords = [(0, height // 2), (width, height // 2)]
+                    else:
+                        # Default to middle horizontal line
+                        line_coords = [(0, height // 2), (width, height // 2)]
+                
                 CLASS_COLORS = {
                     "person": (0, 255, 0),       # Green
                     "vehicle": (255, 0, 0),      # Blue
@@ -706,6 +735,16 @@ def index_objectcount_task(
                     
                     if frame_idx % 10 == 0:
                         logger.info(f"Processing frame {frame_idx}/{total_frames}...")
+                        if total_frames > 0:
+                            progress = int((frame_idx / total_frames) * 100)
+                            try:
+                                import redis.asyncio as aioredis
+                                from configs.base import settings
+                                r_client = aioredis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                                await r_client.setex(f"objectcount:progress:{media_id}", 3600, str(progress))
+                                await r_client.close()
+                            except Exception as re_err:
+                                logger.error(f"Failed to update progress in Redis: {re_err}")
                     
                     results = model(frame, conf=0.10, iou=0.5, device=device, verbose=False)
                     detections = []
@@ -828,22 +867,63 @@ def index_objectcount_task(
                         tid = track.track_id
                         g_lbl = getattr(track, "gender", None)
                         
+                        # Get bounding box center
+                        x1, y1, x2, y2 = [int(v) for v in track.tlbr]
+                        cx = int(x1 + (x2 - x1) / 2)
+                        cy = int(y1 + (y2 - y1) / 2)
+                        current_pos = (cx, cy)
+                        
                         if tid not in tracks_history:
+                            side_val = None
+                            if line_coords is not None:
+                                p_a, p_b = line_coords
+                                side_val_num = (p_b[0] - p_a[0]) * (cy - p_a[1]) - (p_b[1] - p_a[1]) * (cx - p_a[0])
+                                side_val = 1 if side_val_num >= 0 else -1
+
                             tracks_history[tid] = {
                                 "class_name": track.class_name,
                                 "gender": g_lbl,
                                 "first_frame": frame_idx,
                                 "last_frame": frame_idx,
-                                "total_frames": 1
+                                "total_frames": 1,
+                                "last_position": current_pos,
+                                "last_side": side_val
                             }
                         else:
+                            prev_pos = tracks_history[tid].get("last_position")
                             tracks_history[tid]["last_frame"] = frame_idx
                             tracks_history[tid]["total_frames"] += 1
                             if g_lbl:
                                 tracks_history[tid]["gender"] = g_lbl
+
+                            # Line crossing check
+                            if line_coords is not None and prev_pos is not None:
+                                p_a, p_b = line_coords
+                                side_val_num = (p_b[0] - p_a[0]) * (cy - p_a[1]) - (p_b[1] - p_a[1]) * (cx - p_a[0])
+                                current_side = 1 if side_val_num >= 0 else -1
+                                
+                                last_side = tracks_history[tid].get("last_side")
+                                if last_side is not None and last_side != current_side:
+                                    if check_segment_intersection(prev_pos, current_pos, p_a, p_b):
+                                        cname_mapped = track.class_name
+                                        if last_side == -1 and current_side == 1:
+                                            line_crossing_entries += 1
+                                            if cname_mapped not in line_crossing_class_counts:
+                                                line_crossing_class_counts[cname_mapped] = {"entry": 0, "exit": 0}
+                                            line_crossing_class_counts[cname_mapped]["entry"] += 1
+                                        elif last_side == 1 and current_side == -1:
+                                            line_crossing_exits += 1
+                                            if cname_mapped not in line_crossing_class_counts:
+                                                line_crossing_class_counts[cname_mapped] = {"entry": 0, "exit": 0}
+                                            line_crossing_class_counts[cname_mapped]["exit"] += 1
+                                        
+                                        tracks_history[tid]["last_side"] = current_side
+                                elif last_side is None:
+                                    tracks_history[tid]["last_side"] = current_side
+                            
+                            tracks_history[tid]["last_position"] = current_pos
                                 
                         # Visual drawing
-                        x1, y1, x2, y2 = [int(v) for v in track.tlbr]
                         color = CLASS_COLORS.get(track.class_name, (200, 200, 200))
                         
                         # Draw bounding box
@@ -855,6 +935,36 @@ def index_objectcount_task(
                             label += f" ({g_lbl})"
                             
                         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                    # Visual drawing of the line if enabled
+                    if line_coords is not None:
+                        # Draw main crossing line in gold/orange color
+                        cv2.line(frame, line_coords[0], line_coords[1], (0, 165, 255), 3)
+                        # End point markers
+                        cv2.circle(frame, line_coords[0], 6, (0, 0, 255), -1)
+                        cv2.circle(frame, line_coords[1], 6, (0, 0, 255), -1)
+                        
+                        # Draw directional labels near the midpoint of the line
+                        p_a, p_b = line_coords
+                        mid_x = (p_a[0] + p_b[0]) // 2
+                        mid_y = (p_a[1] + p_b[1]) // 2
+                        
+                        dx = p_b[0] - p_a[0]
+                        dy = p_b[1] - p_a[1]
+                        length = np.sqrt(dx*dx + dy*dy)
+                        if length > 0:
+                            nx = -dy / length
+                            ny = dx / length
+                            
+                            # Offset labels 25 pixels normal to the line
+                            in_x = int(mid_x + 25 * nx)
+                            in_y = int(mid_y + 25 * ny)
+                            out_x = int(mid_x - 25 * nx)
+                            out_y = int(mid_y - 25 * ny)
+                            
+                            font = cv2.FONT_HERSHEY_SIMPLEX
+                            cv2.putText(frame, "IN", (in_x - 10, in_y + 5), font, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+                            cv2.putText(frame, "OUT", (out_x - 15, out_y + 5), font, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
 
                     # Compute live counts for HUD
                     live_counts = {}
@@ -874,6 +984,11 @@ def index_objectcount_task(
                         l_cnt = live_counts.get(cname, 0)
                         hud_text = f"Unique {cname.capitalize()}: {u_cnt} | Live: {l_cnt}"
                         cv2.putText(frame, hud_text, (20, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                        hud_y += 25
+
+                    if line_coords is not None:
+                        hud_text = f"Total Entries: {line_crossing_entries} | Exits: {line_crossing_exits}"
+                        cv2.putText(frame, hud_text, (20, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                         hud_y += 25
 
                     writer.write(frame)
@@ -935,6 +1050,14 @@ def index_objectcount_task(
                         "unknown": unknown_count
                     }
                 }
+                
+                if line_coords is not None:
+                    report_summary["line_crossing_analytics"] = {
+                        "line_coords": line_coords,
+                        "total_entries": line_crossing_entries,
+                        "total_exits": line_crossing_exits,
+                        "class_breakdown": line_crossing_class_counts
+                    }
                 
                 # Update media details
                 await repo.update_media_results(

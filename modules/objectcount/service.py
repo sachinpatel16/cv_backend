@@ -114,7 +114,25 @@ class ObjectCountService:
         return await self.repo.get_media_by_id(media_id, tenant_id)
 
     async def get_all_media(self, tenant_id: uuid.UUID) -> List[ObjectCountMedia]:
-        return await self.repo.get_all_media(tenant_id)
+        media_list = await self.repo.get_all_media(tenant_id)
+        from database.redis import get_redis_client
+        redis_client = get_redis_client()
+        for media in media_list:
+            progress = 0
+            if media.status == "completed":
+                progress = 100
+            elif media.status == "failed":
+                progress = 0
+            elif media.status == "processing":
+                if redis_client:
+                    try:
+                        val = await redis_client.get(f"objectcount:progress:{media.id}")
+                        if val is not None:
+                            progress = int(val)
+                    except Exception:
+                        progress = 0
+            media.progress_percentage = progress
+        return media_list
 
     async def get_media_detail(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> ObjectCountMedia:
         media = await self.repo.get_media_with_results(media_id, tenant_id)
@@ -123,6 +141,22 @@ class ObjectCountService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Media record not found or access denied."
             )
+        from database.redis import get_redis_client
+        redis_client = get_redis_client()
+        progress = 0
+        if media.status == "completed":
+            progress = 100
+        elif media.status == "failed":
+            progress = 0
+        elif media.status == "processing":
+            if redis_client:
+                try:
+                    val = await redis_client.get(f"objectcount:progress:{media_id}")
+                    if val is not None:
+                        progress = int(val)
+                except Exception:
+                    progress = 0
+        media.progress_percentage = progress
         return media
 
     async def get_media_results(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> List[ObjectCountResult]:
