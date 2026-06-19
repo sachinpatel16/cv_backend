@@ -53,5 +53,8 @@ class ObjectCountAnalyzeRequest(BaseModel):
     confidence_threshold: float = 0.35
     min_track_frames: int = 100
     track_buffer: int = 150
+    gmc_method: str = "none"
+    reid_classes: Optional[List[str]] = ["person"]
+    imgsz: int = 480
     entry_exit_report: bool = False
     line_coords: Optional[List[List[int]]] = None

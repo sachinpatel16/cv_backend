@@ -97,6 +97,9 @@ Triggers a customized background YOLO + BoT-SORT + InsightFace analysis task on 
   * `confidence_threshold`: `float` (Optional. YOLO detection confidence threshold. Default: `0.35`)
   * `min_track_frames`: `integer` (Optional. Minimum number of frames a track must be active to be counted in report. Default: `100`)
   * `track_buffer`: `integer` (Optional. Number of frames to keep a lost track in memory. Default: `150`)
+  * `gmc_method`: `string` (Optional. Global Motion Compensation method to correct camera motion in tracking, e.g., `"none"`, `"ortho"`, `"aff_sift"`, `"ecc"`. Default: `"none"`)
+  * `reid_classes`: `string[]` (Optional. List of COCO classes to apply ReID feature extraction to. Default: `["person"]`)
+  * `imgsz`: `integer` (Optional. Frame size/resolution for YOLO detection. Default: `480`)
   * `entry_exit_report`: `boolean` (Optional. Enables counting crossings in both directions relative to a defined line. Default: `false`)
   * `line_coords`: `integer[][]` (Optional. Line coordinates defined as a list of two points, e.g., `[[100, 200], [300, 400]]`. If `entry_exit_report` is enabled but `line_coords` is not defined, it defaults to a horizontal line in the middle of the video.)
 
@@ -112,6 +115,9 @@ curl -X POST "http://localhost:8000/api/v1/objectcount/media/f357b226-fe93-49c3-
     "confidence_threshold": 0.35,
     "min_track_frames": 2,
     "track_buffer": 30,
+    "gmc_method": "none",
+    "reid_classes": ["person"],
+    "imgsz": 480,
     "entry_exit_report": true,
     "line_coords": [[0, 360], [1280, 360]]
   }'

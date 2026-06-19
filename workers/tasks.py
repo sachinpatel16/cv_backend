@@ -548,7 +548,7 @@ def index_objectcount_task(
             from modules.objectcount.repository import ObjectCountRepository
             from modules.objectcount.tracker import BoTSORTTracker, STrack
             from modules.objectcount.gender_classifier import InsightFaceGenderClassifier
-            from modules.peoplecount.reid_model import ReIDExtractor
+            from modules.objectcount.reid_model import ReIDExtractor
             from ultralytics import YOLO
             import torch
             
@@ -603,6 +603,8 @@ def index_objectcount_task(
             classes_to_track = configs.get("classes_to_track")
             classify_vehicle = configs.get("classify_vehicle", False)
             classify_gender = configs.get("classify_gender", False)
+            reid_classes = configs.get("reid_classes", ["person"])
+            imgsz = configs.get("imgsz", 480)
 
             if media_type == "photo":
                 # Process photo
@@ -746,7 +748,7 @@ def index_objectcount_task(
                             except Exception as re_err:
                                 logger.error(f"Failed to update progress in Redis: {re_err}")
                     
-                    results = model(frame, conf=0.10, iou=0.5, device=device, verbose=False)
+                    results = model(frame, conf=0.10, iou=0.5, imgsz=imgsz, device=device, verbose=False)
                     detections = []
                     
                     if results:
@@ -780,13 +782,21 @@ def index_objectcount_task(
                             logger.error(f"Error computing GMC: {e}")
                             H = np.eye(2, 3)
 
-                    # Extract Re-ID appearance features
-                    is_reid_frame = (frame_idx % 1 == 0)
+                    # Extract Re-ID appearance features (filtered by reid_classes to match POC)
+                    reid_interval = configs.get("reid_interval", 5)
+                    is_reid_frame = (frame_idx % reid_interval == 0)
                     if reid_extractor and detections and is_reid_frame:
                         crops = []
                         valid_indices = []
                         h_f, w_f, _ = frame.shape
                         for idx, det in enumerate(detections):
+                            # Only extract ReID features for specified classes (e.g. person)
+                            # osnet is a person-ReID model, applying it to vehicles produces
+                            # garbage features that corrupt tracking association
+                            if reid_classes and det["class_name"] not in reid_classes:
+                                det["feature"] = None
+                                continue
+
                             x1, y1, x2, y2 = map(int, det["box"])
                             x1 = max(0, min(x1, w_f - 1))
                             y1 = max(0, min(y1, h_f - 1))
