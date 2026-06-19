@@ -53,7 +53,7 @@ services:
   worker:
     build: .
     container_name: cv_backend_worker
-    command: celery -A workers.celery worker --loglevel=info
+    command: celery -A workers.celery worker --loglevel=info --concurrency=1
     volumes:
       - .:/app
       - ${INSIGHTFACE_CACHE_DIR:-~/.insightface}:/root/.insightface
