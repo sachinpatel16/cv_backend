@@ -3,9 +3,14 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies
+# Install build and runtime dependencies for OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Copy only requirements first for caching
 COPY requirements.txt .

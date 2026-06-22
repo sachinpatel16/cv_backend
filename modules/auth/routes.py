@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Response, Cookie, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db
@@ -14,23 +14,28 @@ from modules.users.model import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-@router.post("/register", response_model=StandardResponse[TokenResponse], status_code=status.HTTP_201_CREATED)
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/register", response_model=StandardResponse[TokenResponseUser], status_code=status.HTTP_201_CREATED)
+async def register(response: Response, data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """Register a new user (optional tenant)."""
     service = AuthService(db)
-    return await service.register(data)
+    return await service.register(response, data)
 
-@router.post("/login", response_model=StandardResponse[TokenResponse])
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/login", response_model=StandardResponse[TokenResponseUser])
+async def login(response: Response, data: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate user credentials and return JWT tokens."""
     service = AuthService(db)
-    return await service.login(data)
+    return await service.login(response, data)
 
-@router.post("/refresh", response_model=StandardResponse[TokenResponse])
-async def refresh(data: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/refresh", response_model=StandardResponse[TokenResponseUser])
+async def refresh(response: Response, refresh_token: str | None = Cookie(None), db: AsyncSession = Depends(get_db)):
     """Refresh access token using refresh token."""
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is missing"
+        )
     service = AuthService(db)
-    return await service.refresh_tokens(data.refresh_token)
+    return await service.refresh_tokens(response, refresh_token)
 
 @router.get("/me", response_model=StandardResponse[TokenResponseUser])
 async def get_me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -65,8 +70,10 @@ async def change_password(
     )
 
 @router.post("/logout", response_model=StandardResponse, status_code=status.HTTP_200_OK)
-async def logout(current_user: User = Depends(get_current_user)):
+async def logout(response: Response, current_user: User = Depends(get_current_user)):
     """Stateless logout. Token should be deleted from the client."""
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
     return StandardResponse(
         message="Successfully logged out",
         status=status.HTTP_200_OK,

@@ -24,10 +24,11 @@ if config.config_file_name is not None:
 # This must come AFTER the path setup
 from database.base import Base
 
-# Explicitly import all models here so they register with Base.metadata for autogenerate detection
 from modules.organizations.model import Organization
 from modules.users.model import User
 from modules.permissions.model import UserPermission
+from modules.peoplefind.model import MediaSource, FaceEmbedding, FaceSearchSession, FaceSearchResult
+
 
 # Set target metadata for 'autogenerate'
 target_metadata = Base.metadata
