@@ -28,7 +28,8 @@ from modules.organizations.model import Organization
 from modules.users.model import User
 from modules.permissions.model import UserPermission
 from modules.peoplefind.model import MediaSource, FaceEmbedding, FaceSearchSession, FaceSearchResult
-
+from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
+from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
 
 # Set target metadata for 'autogenerate'
 target_metadata = Base.metadata
