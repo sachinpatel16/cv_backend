@@ -49,6 +49,10 @@ class Settings(BaseSettings):
 
     # RTSP Configuration
     RTSP_RETRY_INTERVAL: int = 5  # seconds
+
+    # YOLO Configuration
+    YOLO_MODEL: str = "models/yolo12n.pt"
+    YOLO_IMGSZ: int = 384
     
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -11,6 +11,7 @@ from modules.auth.routes import router as auth_router
 from modules.peoplefind.routes import router as peoplefind_router
 from modules.peopleanalytics.routes import router as peopleanalytics_router
 from modules.employees.routes import router as employees_router
+from modules.faceanalytics.routes import router as faceanalytics_router
 
 
 from fastapi.staticfiles import StaticFiles
@@ -115,6 +116,7 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
 app.include_router(peopleanalytics_router, prefix=settings.API_V1_STR)
 app.include_router(employees_router, prefix=settings.API_V1_STR)
+app.include_router(faceanalytics_router, prefix=settings.API_V1_STR)
 
 
 @app.on_event("startup")

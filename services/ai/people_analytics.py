@@ -88,11 +88,7 @@ class LineCrossingCounter:
         """
         self.object_tracks[object_id].append(center_point)
         
-        if len(self.object_tracks[object_id]) < 2:
-            return False
-            
         current_pos = np.array(self.object_tracks[object_id][-1])
-        prev_pos = np.array(self.object_tracks[object_id][-2])
         current_distance = self.get_distance_from_line(current_pos)
         current_side = 1 if current_distance >= 0 else -1
         
@@ -105,8 +101,15 @@ class LineCrossingCounter:
         if self.armed_side[object_id] is None:
             if abs(current_distance) > self.counting_region:
                 self.armed_side[object_id] = current_side
+                
+        if self.armed_side[object_id] is None:
             return False
             
+        if len(self.object_tracks[object_id]) < 2:
+            return False
+            
+        prev_pos = np.array(self.object_tracks[object_id][-2])
+        
         if current_side != self.armed_side[object_id]:
             prev_side = self.armed_side[object_id]
             self.armed_side[object_id] = None  # Disarm

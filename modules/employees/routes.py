@@ -1,4 +1,6 @@
 import uuid
+import os
+import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile, Form, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +10,9 @@ from shared.schemas.response import StandardResponse
 from shared.dependencies.auth import require_admin, require_viewer
 from modules.users.model import User
 from modules.employees.service import EmployeeService
-from modules.employees.schema import EmployeeResponse, EmployeeAttendanceResponse
+from modules.employees.schema import EmployeeResponse, EmployeeAttendanceResponse, EmployeeProcessVideosRequest, GroupPhotoAttendanceResponse
+from modules.peopleanalytics.schema import UploadedVideoResponse, PeopleAnalyticsSessionResponse
+
 
 router = APIRouter(prefix="/employees", tags=["Employee Registry"])
 
@@ -74,6 +78,30 @@ async def list_employees(
         message=f"Successfully retrieved {len(employees)} employee(s).",
         status=status.HTTP_200_OK,
         data=[EmployeeResponse.model_validate(e) for e in employees]
+    )
+
+
+@router.get(
+    "/attendance",
+    response_model=StandardResponse[List[EmployeeAttendanceResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def get_attendance_by_date_range(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves all employee attendance logs within a specific date range.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    logs = await service.get_attendance_by_date_range(tenant_id, start_date, end_date)
+    return StandardResponse(
+        message=f"Retrieved {len(logs)} attendance logs between {start_date} and {end_date}.",
+        status=status.HTTP_200_OK,
+        data=[EmployeeAttendanceResponse.model_validate(l) for l in logs]
     )
 
 
@@ -178,3 +206,225 @@ async def get_session_employee_attendance(
         status=status.HTTP_200_OK,
         data=[EmployeeAttendanceResponse.model_validate(l) for l in logs]
     )
+
+
+@router.post(
+    "/attendance/photo",
+    response_model=StandardResponse[GroupPhotoAttendanceResponse],
+    status_code=status.HTTP_200_OK
+)
+async def mark_group_photo_attendance(
+    file: UploadFile = File(..., description="Group photo containing employees"),
+    similarity_threshold: float = Form(0.85, ge=0.5, le=1.0),
+    confidence_threshold: float = Form(0.3, ge=0.1, le=1.0),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Detects employees in a group photo and logs check-in records day-wise.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    logs, annotated_image_path = await service.process_group_photo_attendance(
+        tenant_id=tenant_id,
+        file=file,
+        similarity_threshold=similarity_threshold,
+        confidence_threshold=confidence_threshold
+    )
+    
+    attendance_logs = [EmployeeAttendanceResponse.model_validate(l) for l in logs]
+        
+    return StandardResponse(
+        message=f"Attendance marked for {len(logs)} employee(s).",
+        status=status.HTTP_200_OK,
+        data=GroupPhotoAttendanceResponse(
+            annotated_image_path=annotated_image_path,
+            attendance_logs=attendance_logs
+        )
+    )
+
+
+@router.post(
+    "/attendance/video/upload",
+    response_model=StandardResponse[List[UploadedVideoResponse]],
+    status_code=status.HTTP_202_ACCEPTED
+)
+async def upload_attendance_videos(
+    files: List[UploadFile] = File(..., description="Select up to 10 video files to upload"),
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Uploads standalone attendance videos, saves them under storage/employee_attendance_inputs/{user_id}/, and registers them.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    details = await service.upload_attendance_video_files(
+        tenant_id=tenant_id,
+        files=files,
+        user_id=current_user.id
+    )
+    return StandardResponse(
+        message=f"Successfully uploaded {len(details)} video file(s).",
+        status=status.HTTP_202_ACCEPTED,
+        data=[UploadedVideoResponse.model_validate(d) for d in details]
+    )
+
+
+@router.get(
+    "/attendance/video/uploads",
+    response_model=StandardResponse[List[UploadedVideoResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def list_attendance_uploads(
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves all video files uploaded by the active user for employee video attendance.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    videos = await service.get_uploaded_videos(tenant_id, current_user.id)
+    return StandardResponse(
+        message=f"Successfully retrieved {len(videos)} uploaded video(s).",
+        status=status.HTTP_200_OK,
+        data=[UploadedVideoResponse.model_validate(v) for v in videos]
+    )
+
+
+@router.delete(
+    "/attendance/video/uploads/{video_id}",
+    response_model=StandardResponse[None],
+    status_code=status.HTTP_200_OK
+)
+async def delete_attendance_upload(
+    video_id: uuid.UUID,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Deletes the uploaded video metadata and physical file (uploader or admin only).
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    await service.delete_uploaded_video(video_id, tenant_id, current_user)
+    return StandardResponse(
+        message="Uploaded video and physical file deleted successfully.",
+        status=status.HTTP_200_OK,
+        data=None
+    )
+
+
+@router.post(
+    "/attendance/video/process",
+    response_model=StandardResponse[List[PeopleAnalyticsSessionResponse]],
+    status_code=status.HTTP_202_ACCEPTED
+)
+async def process_attendance_videos(
+    request: EmployeeProcessVideosRequest,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Spawns Celery tracking runs for standalone employee video attendance logs.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    sessions = await service.create_and_start_attendance_sessions(
+        tenant_id=tenant_id,
+        videos=request.videos,
+        global_similarity_threshold=0.85,
+        global_confidence_threshold=0.3,
+        user_id=current_user.id
+    )
+    return StandardResponse(
+        message=f"Successfully registered and started processing for {len(sessions)} session(s).",
+        status=status.HTTP_202_ACCEPTED,
+        data=[PeopleAnalyticsSessionResponse.model_validate(s) for s in sessions]
+    )
+
+
+
+@router.get(
+    "/attendance/video/sessions",
+    response_model=StandardResponse[List[PeopleAnalyticsSessionResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def list_attendance_sessions(
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves all video attendance session runs created by the user.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    sessions = await service.list_attendance_sessions(tenant_id, current_user.id)
+    return StandardResponse(
+        message=f"Retrieved {len(sessions)} session(s).",
+        status=status.HTTP_200_OK,
+        data=[PeopleAnalyticsSessionResponse.model_validate(s) for s in sessions]
+    )
+
+
+@router.get(
+    "/attendance/video/sessions/{session_id}",
+    response_model=StandardResponse[PeopleAnalyticsSessionResponse],
+    status_code=status.HTTP_200_OK
+)
+async def get_attendance_session_details(
+    session_id: uuid.UUID,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Queries execution metrics and state for a video attendance session.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    session = await service.get_attendance_session(session_id, tenant_id)
+    return StandardResponse(
+        message="Session details retrieved successfully.",
+        status=status.HTTP_200_OK,
+        data=PeopleAnalyticsSessionResponse.model_validate(session)
+    )
+
+
+@router.get(
+    "/attendance/video/sessions/{session_id}/video",
+    status_code=status.HTTP_200_OK
+)
+async def stream_attendance_annotated_video(
+    session_id: uuid.UUID,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Streams or downloads the annotated output MP4 containing employee track boundaries.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = EmployeeService(db)
+    session = await service.get_attendance_session(session_id, tenant_id)
+    
+    if session.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Video cannot be retrieved. Session status is currently '{session.status}'."
+        )
+    if not session.output_video_path or not os.path.exists(session.output_video_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Annotated video file is missing or not generated on disk."
+        )
+
+    from fastapi.responses import FileResponse
+    file_ext = os.path.splitext(session.output_video_path)[1].lower()
+    media_type = "image/jpeg" if file_ext == ".jpg" else "video/mp4"
+
+    return FileResponse(
+        path=session.output_video_path,
+        media_type=media_type,
+        filename=f"{session_id}{file_ext}"
+    )
+

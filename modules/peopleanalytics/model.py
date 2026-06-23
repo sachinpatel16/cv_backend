@@ -71,13 +71,16 @@ class EmployeeAttendanceLog(BaseModel):
     """
     __tablename__ = "employee_attendance_logs"
 
-    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("people_analytics_sessions.id", ondelete="CASCADE"), nullable=False)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("people_analytics_sessions.id", ondelete="CASCADE"), nullable=True)
     employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
-    first_seen: Mapped[float] = mapped_column(Float, nullable=False) # Video timestamp in seconds
-    last_seen: Mapped[float] = mapped_column(Float, nullable=False)  # Video timestamp in seconds
+    first_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False) # Video timestamp in seconds
+    last_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Video timestamp in seconds
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
 
-    session: Mapped["PeopleAnalyticsSession"] = relationship(back_populates="employee_attendance")
+    employee_entry_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    employee_exit_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    session: Mapped[Optional["PeopleAnalyticsSession"]] = relationship(back_populates="employee_attendance")
     employee: Mapped["Employee"] = relationship(back_populates="attendance_logs")
 
 

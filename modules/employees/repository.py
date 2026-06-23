@@ -117,6 +117,30 @@ class EmployeeRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_employee_attendance_by_date_range(
+        self, tenant_id: uuid.UUID, start_date: object, end_date: object
+    ) -> List[EmployeeAttendanceLog]:
+        from datetime import datetime, time, timezone
+        # Convert date objects to datetime boundaries in UTC
+        start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+        end_dt = datetime.combine(end_date, time.max, tzinfo=timezone.utc)
+
+        stmt = (
+            select(EmployeeAttendanceLog)
+            .join(Employee, EmployeeAttendanceLog.employee_id == Employee.id)
+            .options(selectinload(EmployeeAttendanceLog.employee))
+            .where(
+                Employee.tenant_id == tenant_id,
+                EmployeeAttendanceLog.employee_entry_timestamp >= start_dt,
+                EmployeeAttendanceLog.employee_entry_timestamp <= end_dt,
+                EmployeeAttendanceLog.is_delete == False,
+                Employee.is_delete == False
+            )
+            .order_by(EmployeeAttendanceLog.employee_entry_timestamp.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_session_by_id(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[PeopleAnalyticsSession]:
         stmt = select(PeopleAnalyticsSession).where(
             PeopleAnalyticsSession.id == session_id,
@@ -125,3 +149,141 @@ class EmployeeRepository:
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
+
+    async def log_employee_attendance(
+        self,
+        tenant_id: uuid.UUID,
+        employee_id: uuid.UUID,
+        session_id: Optional[uuid.UUID] = None,
+        first_seen_sec: float = 0.0,
+        last_seen_sec: float = 0.0,
+        occurrence_increment: int = 1,
+        detection_time: Optional[object] = None
+    ) -> EmployeeAttendanceLog:
+        """
+        Registers or updates an employee attendance record for a calendar day (day-wise).
+        """
+        from datetime import datetime, time, timezone
+        if detection_time is None:
+            detection_time = datetime.now(timezone.utc)
+        elif detection_time.tzinfo is None:
+            detection_time = detection_time.replace(tzinfo=timezone.utc)
+
+        # Get calendar day boundaries in UTC
+        start_of_day = datetime.combine(detection_time.date(), time.min, tzinfo=timezone.utc)
+        end_of_day = datetime.combine(detection_time.date(), time.max, tzinfo=timezone.utc)
+
+        stmt = select(EmployeeAttendanceLog).where(
+            EmployeeAttendanceLog.employee_id == employee_id,
+            EmployeeAttendanceLog.employee_entry_timestamp >= start_of_day,
+            EmployeeAttendanceLog.employee_entry_timestamp <= end_of_day,
+            EmployeeAttendanceLog.is_delete == False
+        )
+        res = await self.db.execute(stmt)
+        log = res.scalars().first()
+
+        if log:
+            # Update existing log for the day
+            log.occurrence_count += occurrence_increment
+            if first_seen_sec < log.first_seen:
+                log.first_seen = first_seen_sec
+            if last_seen_sec > log.last_seen:
+                log.last_seen = last_seen_sec
+
+            # Update entry/exit timestamps
+            if detection_time < log.employee_entry_timestamp:
+                log.employee_entry_timestamp = detection_time
+            if detection_time > log.employee_exit_timestamp:
+                log.employee_exit_timestamp = detection_time
+
+            if session_id and not log.session_id:
+                log.session_id = session_id
+
+            await self.db.flush()
+            return log
+        else:
+            # Create a new log for the day
+            log = EmployeeAttendanceLog(
+                session_id=session_id,
+                employee_id=employee_id,
+                first_seen=first_seen_sec,
+                last_seen=last_seen_sec,
+                occurrence_count=occurrence_increment,
+                employee_entry_timestamp=detection_time,
+                employee_exit_timestamp=detection_time
+            )
+            self.db.add(log)
+            await self.db.flush()
+            return log
+
+    async def create_uploaded_video(
+        self, tenant_id: uuid.UUID, original_name: str, saved_path: str, user_id: Optional[uuid.UUID] = None
+    ) -> object:
+        from modules.peopleanalytics.model import UploadedVideo
+        uv = UploadedVideo(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            original_name=original_name,
+            saved_path=saved_path
+        )
+        self.db.add(uv)
+        await self.db.flush()
+        return uv
+
+    async def get_uploaded_videos(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> list:
+        from modules.peopleanalytics.model import UploadedVideo
+        stmt = select(UploadedVideo).where(
+            UploadedVideo.tenant_id == tenant_id,
+            UploadedVideo.user_id == user_id,
+            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
+            UploadedVideo.is_delete == False
+        ).order_by(UploadedVideo.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_uploaded_video_by_id(self, video_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[object]:
+        from modules.peopleanalytics.model import UploadedVideo
+        stmt = select(UploadedVideo).where(
+            UploadedVideo.id == video_id,
+            UploadedVideo.tenant_id == tenant_id,
+            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
+            UploadedVideo.is_delete == False
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
+    async def create_analytics_session(
+        self,
+        tenant_id: uuid.UUID,
+        video_name: str,
+        video_path: str,
+        line_start: Optional[List[int]] = None,
+        line_end: Optional[List[int]] = None,
+        similarity_threshold: float = 0.85,
+        confidence_threshold: float = 0.3
+    ) -> object:
+        from modules.peopleanalytics.model import PeopleAnalyticsSession
+        session = PeopleAnalyticsSession(
+            tenant_id=tenant_id,
+            video_name=video_name,
+            video_path=video_path,
+            line_start=line_start,
+            line_end=line_end,
+            similarity_threshold=similarity_threshold,
+            confidence_threshold=confidence_threshold,
+            status="pending"
+        )
+        self.db.add(session)
+        await self.db.flush()
+        return session
+
+    async def get_sessions(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> list:
+        from modules.peopleanalytics.model import PeopleAnalyticsSession
+        stmt = select(PeopleAnalyticsSession).where(
+            PeopleAnalyticsSession.tenant_id == tenant_id,
+            PeopleAnalyticsSession.video_path.like(f"%employee_attendance_inputs/{user_id}/%"),
+            PeopleAnalyticsSession.is_delete == False
+        ).order_by(PeopleAnalyticsSession.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
