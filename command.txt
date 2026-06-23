@@ -3,7 +3,7 @@
 # ==========================================
 
 # Create a new migration with autogenerate (based on changes in models)
-alembic revision --autogenerate -m "add_peoplefind_models"
+alembic revision --autogenerate -m "create_activity model"
 
 # Apply all pending migrations to the local database
 alembic upgrade head
@@ -16,6 +16,16 @@ alembic history --verbose
 
 # Show current database migration status
 alembic current
+
+# ==========================================
+# LOCAL RUN COMMANDS (FASTAPI & CELERY)
+# ==========================================
+
+# 1. Run the FastAPI backend application locally
+python main.py
+
+# 2. Run the Celery background worker locally (Note: Windows requires '-P solo' or '--pool=solo')
+celery -A workers.celery worker --loglevel=info -P solo
 
 
 # ==========================================
