@@ -41,6 +41,9 @@ from modules.peopleanalytics.model import (
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
 from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
+from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
+from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
+from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
 
 
 # Set target metadata for 'autogenerate'
