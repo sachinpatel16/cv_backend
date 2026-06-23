@@ -9,6 +9,8 @@ import uvicorn
 from configs.base import settings
 from modules.auth.routes import router as auth_router
 from modules.peoplefind.routes import router as peoplefind_router
+from modules.peoplecount.routes import router as peoplecount_router
+from modules.objectcount.routes import router as objectcount_router
 from modules.smokingdetect.routes import router as smokingdetect_router
 
 
@@ -84,6 +86,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Include Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(peoplefind_router, prefix=settings.API_V1_STR)
+app.include_router(peoplecount_router, prefix=settings.API_V1_STR)
+app.include_router(objectcount_router, prefix=settings.API_V1_STR)
 app.include_router(smokingdetect_router, prefix=settings.API_V1_STR)
 
 
