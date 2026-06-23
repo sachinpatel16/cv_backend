@@ -28,6 +28,19 @@ from modules.organizations.model import Organization
 from modules.users.model import User
 from modules.permissions.model import UserPermission
 from modules.peoplefind.model import MediaSource, FaceEmbedding, FaceSearchSession, FaceSearchResult
+from modules.employees.model import Employee, EmployeeEmbedding
+from modules.peopleanalytics.model import (
+    UploadedVideo,
+    EmployeeAttendanceLog,
+    PeopleAnalyticsSession,
+    PersonIdentity,
+    PersonEmbedding,
+    PersonOccurrence,
+    LineCrossingLog
+)
+from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
+from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
+from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
 from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
