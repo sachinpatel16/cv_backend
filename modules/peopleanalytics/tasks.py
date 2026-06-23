@@ -121,70 +121,55 @@ async def _process_image_job(
         if embedding is None:
             continue
 
-        # 1. Search employees first
-        match_emp = await repo.find_similar_employee(session.tenant_id, embedding.tolist(), similarity_threshold)
-        if match_emp:
-            employee, sim = match_emp
-            await repo.create_employee_attendance(
+        # Search visitors
+        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+        if match_vis:
+            visitor, sim = match_vis
+            crop_path = None
+            if crop is not None and crop.size > 0:
+                crop_filename = f"{uuid.uuid4()}.jpg"
+                user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
+                os.makedirs(user_crops_dir, exist_ok=True)
+                crop_path = os.path.join(user_crops_dir, crop_filename)
+                cv2.imwrite(crop_path, crop)
+
+            await repo.create_person_occurrence(
                 session_id=session.id,
-                employee_id=employee.id,
+                identity_id=visitor.id,
+                tracker_id=idx,
                 first_seen=0.0,
                 last_seen=0.0,
-                occurrence_count=1
+                crop_path=crop_path
             )
-            seen_identities.add(f"employee:{employee.id}")
-            label = f"{employee.first_name} (EMP)"
-            color = (0, 255, 0) # Green for employees
+            # Keep database updated with new profile details
+            await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
+            seen_identities.add(f"visitor:{visitor.id}")
+            label = f"Visitor #{str(visitor.id)[:4]}"
+            color = (0, 180, 255) # Orange for returning visitors
         else:
-            # 2. Search visitors
-            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
-            if match_vis:
-                visitor, sim = match_vis
-                crop_path = None
-                if crop is not None and crop.size > 0:
-                    crop_filename = f"{uuid.uuid4()}.jpg"
-                    user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
-                    os.makedirs(user_crops_dir, exist_ok=True)
-                    crop_path = os.path.join(user_crops_dir, crop_filename)
-                    cv2.imwrite(crop_path, crop)
+            # Create a new unique identity
+            visitor = await repo.create_person_identity(session.tenant_id)
+            await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
+            crop_path = None
+            if crop is not None and crop.size > 0:
+                crop_filename = f"{uuid.uuid4()}.jpg"
+                user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
+                os.makedirs(user_crops_dir, exist_ok=True)
+                crop_path = os.path.join(user_crops_dir, crop_filename)
+                cv2.imwrite(crop_path, crop)
 
-                await repo.create_person_occurrence(
-                    session_id=session.id,
-                    identity_id=visitor.id,
-                    tracker_id=idx,
-                    first_seen=0.0,
-                    last_seen=0.0,
-                    crop_path=crop_path
-                )
-                # Keep database updated with new profile details
-                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
-                seen_identities.add(f"visitor:{visitor.id}")
-                label = f"Visitor #{str(visitor.id)[:4]}"
-                color = (0, 180, 255) # Orange for returning visitors
-            else:
-                # Create a new unique identity
-                visitor = await repo.create_person_identity(session.tenant_id)
-                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
-                crop_path = None
-                if crop is not None and crop.size > 0:
-                    crop_filename = f"{uuid.uuid4()}.jpg"
-                    user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
-                    os.makedirs(user_crops_dir, exist_ok=True)
-                    crop_path = os.path.join(user_crops_dir, crop_filename)
-                    cv2.imwrite(crop_path, crop)
-
-                await repo.create_person_occurrence(
-                    session_id=session.id,
-                    identity_id=visitor.id,
-                    tracker_id=idx,
-                    first_seen=0.0,
-                    last_seen=0.0,
-                    crop_path=crop_path
-                )
-                first_time_visitor_count += 1
-                seen_identities.add(f"visitor:{visitor.id}")
-                label = "New Visitor"
-                color = (0, 0, 255) # Red for new visitors
+            await repo.create_person_occurrence(
+                session_id=session.id,
+                identity_id=visitor.id,
+                tracker_id=idx,
+                first_seen=0.0,
+                last_seen=0.0,
+                crop_path=crop_path
+            )
+            first_time_visitor_count += 1
+            seen_identities.add(f"visitor:{visitor.id}")
+            label = "New Visitor"
+            color = (0, 0, 255) # Red for new visitors
 
         # Draw overlays
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
@@ -342,46 +327,33 @@ async def _process_video_job(
                     if best_crop is not None:
                         embedding = extractor.get_embedding(best_crop)
                         if embedding is not None:
-                            # 1. Match against registered employees
-                            match_emp = await repo.find_similar_employee(session.tenant_id, embedding.tolist(), similarity_threshold)
-                            if match_emp:
-                                employee, sim = match_emp
+                            # Match against generic visitors
+                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                            if match_vis:
+                                visitor, sim = match_vis
                                 track_info.update({
-                                    "type": "employee",
-                                    "id": employee.id,
-                                    "label": f"{employee.first_name} (EMP)",
-                                    "color": (0, 255, 0),
+                                    "type": "visitor",
+                                    "id": visitor.id,
+                                    "label": f"Visitor #{str(visitor.id)[:4]}",
+                                    "color": (0, 180, 255),
                                     "matched": True
                                 })
-                                unique_seen_identities.add(f"employee:{employee.id}")
+                                unique_seen_identities.add(f"visitor:{visitor.id}")
+                                # Keep database updated with new profile details
+                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
                             else:
-                                # 2. Match against generic visitors
-                                match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
-                                if match_vis:
-                                    visitor, sim = match_vis
-                                    track_info.update({
-                                        "type": "visitor",
-                                        "id": visitor.id,
-                                        "label": f"Visitor #{str(visitor.id)[:4]}",
-                                        "color": (0, 180, 255),
-                                        "matched": True
-                                    })
-                                    unique_seen_identities.add(f"visitor:{visitor.id}")
-                                    # Keep database updated with new profile details
-                                    await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
-                                else:
-                                    # Create new anonymous identity
-                                    visitor = await repo.create_person_identity(session.tenant_id)
-                                    await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
-                                    track_info.update({
-                                        "type": "visitor",
-                                        "id": visitor.id,
-                                        "label": "New Visitor",
-                                        "color": (0, 0, 255),
-                                        "matched": True
-                                    })
-                                    unique_seen_identities.add(f"visitor:{visitor.id}")
-                                    first_time_visitors_count += 1
+                                # Create new anonymous identity
+                                visitor = await repo.create_person_identity(session.tenant_id)
+                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                track_info.update({
+                                    "type": "visitor",
+                                    "id": visitor.id,
+                                    "label": "New Visitor",
+                                    "color": (0, 0, 255),
+                                    "matched": True
+                                })
+                                unique_seen_identities.add(f"visitor:{visitor.id}")
+                                first_time_visitors_count += 1
 
                 # Update line crossing
                 if line_counter:
@@ -445,47 +417,33 @@ async def _process_video_job(
             if best_crop is not None:
                 embedding = extractor.get_embedding(best_crop)
                 if embedding is not None:
-                    # 1. Match against registered employees
-                    match_emp = await repo.find_similar_employee(session.tenant_id, embedding.tolist(), similarity_threshold)
-                    if match_emp:
-                        employee, sim = match_emp
+                    # Match against generic visitors
+                    match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                    if match_vis:
+                        visitor, sim = match_vis
                         track_info.update({
-                            "type": "employee",
-                            "id": employee.id,
-                            "label": f"{employee.first_name} (EMP)",
-                            "color": (0, 255, 0),
+                                "type": "visitor",
+                                "id": visitor.id,
+                                "label": f"Visitor #{str(visitor.id)[:4]}",
+                                "color": (0, 180, 255),
+                                "matched": True
+                        })
+                        if not track_info.get("short_crossing", False):
+                            unique_seen_identities.add(f"visitor:{visitor.id}")
+                    else:
+                        # Create new anonymous identity
+                        visitor = await repo.create_person_identity(session.tenant_id)
+                        await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[0, 0, 0, 0], timestamp=track_info["first_seen"])
+                        track_info.update({
+                            "type": "visitor",
+                            "id": visitor.id,
+                            "label": "New Visitor",
+                            "color": (0, 0, 255),
                             "matched": True
                         })
                         if not track_info.get("short_crossing", False):
-                            unique_seen_identities.add(f"employee:{employee.id}")
-                    else:
-                        # 2. Match against generic visitors
-                        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
-                        if match_vis:
-                            visitor, sim = match_vis
-                            track_info.update({
-                                    "type": "visitor",
-                                    "id": visitor.id,
-                                    "label": f"Visitor #{str(visitor.id)[:4]}",
-                                    "color": (0, 180, 255),
-                                    "matched": True
-                            })
-                            if not track_info.get("short_crossing", False):
-                                unique_seen_identities.add(f"visitor:{visitor.id}")
-                        else:
-                            # Create new anonymous identity
-                            visitor = await repo.create_person_identity(session.tenant_id)
-                            await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[0, 0, 0, 0], timestamp=track_info["first_seen"])
-                            track_info.update({
-                                "type": "visitor",
-                                "id": visitor.id,
-                                "label": "New Visitor",
-                                "color": (0, 0, 255),
-                                "matched": True
-                            })
-                            if not track_info.get("short_crossing", False):
-                                unique_seen_identities.add(f"visitor:{visitor.id}")
-                                first_time_visitors_count += 1
+                            unique_seen_identities.add(f"visitor:{visitor.id}")
+                            first_time_visitors_count += 1
 
     # Filter crossings: only keep crossings for non-discarded tracks, and map to resolved visitor IDs
     valid_crossings = []

@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Analyzer: Secure Spatial Intelligence Analytics Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Urbanist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brandDark: '#030712',
+                        brandCanvas: '#090d1a',
+                        brandAccent: '#0ea5e9',
+                        brandSuccess: '#10b981',
+                        brandTextHeader: '#f9fafb',
+                        brandTextBody: '#9ca3af',
+                        brandTextMuted: '#6b7280',
+                    },
+                    fontFamily: {
+                        sansHeader: ['"Plus Jakarta Sans"', 'sans-serif'],
+                        sansBody: ['"Urbanist"', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        body {
+            background-color: #030712;
+            color: #9ca3af;
+            font-family: 'Urbanist', sans-serif;
+            overflow-x: hidden;
+        }
+
+        .slide-outer-frame {
+            position: relative;
+            width: 1280px;
+            height: 720px;
+            overflow: hidden;
+            background-color: #090d1a;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+            border-radius: 12px;
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Ambient gradient styling rules for consulting deck aesthetic */
+        .ambient-glow::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 12% 15%, rgba(14, 165, 233, 0.08) 0%, transparent 45%),
+                        radial-gradient(circle at 88% 85%, rgba(16, 185, 129, 0.07) 0%, transparent 45%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Slide visibility and transition parameters */
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            padding: 60px 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(15px) scale(0.99);
+            transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 10;
+        }
+
+        .slide.active-slide {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Text gradient and title highlighting */
+        .gradient-accent-text {
+            background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .gradient-success-text {
+            background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .slide-title-marker {
+            border-left: 4px solid #0ea5e9;
+            padding-left: 18px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center py-8 px-4">
+
+    <!-- Slide Carousel Header Controls -->
+    <div class="w-full max-w-[1280px] flex justify-between items-center mb-4 px-2">
+        <div class="flex items-center gap-3">
+            <span class="bg-sky-500/10 text-sky-400 border border-sky-500/20 px-3 py-1 rounded-full text-xs font-bold tracking-widest uppercase">
+                Spatial Intelligence Case Study
+            </span>
+            <h4 class="text-brandTextHeader font-sansHeader text-sm font-semibold tracking-wide">
+                Video Analyzer Platform Blueprint
+            </h4>
+        </div>
+        
+        <!-- Navigation Controls -->
+        <div class="flex items-center gap-2">
+            <button onclick="prevSlide()" class="px-3 py-1.5 bg-white/5 border border-white/10 text-brandTextHeader rounded hover:bg-white/10 active:bg-white/20 transition text-xs font-semibold">
+                <i class="fa-solid fa-chevron-left mr-1.5"></i> PREV
+            </button>
+            <div id="slide-indicators" class="text-xs text-brandTextMuted font-mono mx-2">
+                Slide 1 / 5
+            </div>
+            <button onclick="nextSlide()" class="px-3 py-1.5 bg-sky-500/20 border border-sky-500/30 text-sky-300 rounded hover:bg-sky-500/30 active:bg-sky-500/40 transition text-xs font-semibold">
+                NEXT <i class="fa-solid fa-chevron-right ml-1.5"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Viewport Box -->
+    <div id="presentation-viewport" class="slide-outer-frame ambient-glow">
+
+        <!-- ==========================================
+             SLIDE 1: Title & Value Proposition Overview
+             ========================================== -->
+        <div class="slide active-slide" id="slide-1">
+            <div class="h-full flex flex-col justify-between">
+                <div class="my-auto text-center flex flex-col items-center">
+                    <span class="bg-sky-500/10 border border-sky-500/20 text-sky-400 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-[0.2em] mb-6">
+                        Multi-Tenant SaaS Video Analytics Platform
+                    </span>
+                    
+                    <h1 class="text-brandTextHeader font-sansHeader text-[54px] font-extrabold leading-tight tracking-tight max-w-[1000px] mb-6">
+                        Video Analyzer: Secure <span class="gradient-accent-text">Multi-Tenant Video Analytics</span> Platform
+                    </h1>
+                    
+                    <p class="text-brandTextBody text-xl max-w-[840px] leading-relaxed mb-10 font-light font-sansBody">
+                        Multi-tenant SaaS platform for AI-powered video analytics, supporting live CCTV/RTSP streams, zones, rules, intrusion, loitering, occupancy, and automated PDF/Excel reports.
+                    </p>
+
+                    <div class="bg-gray-900/40 border border-white/5 rounded-2xl p-6 w-full max-w-[950px] text-left backdrop-blur-sm">
+                        <div class="flex items-start gap-4">
+                            <div class="w-10 h-10 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0 mt-1">
+                                <i class="fa-solid fa-eye text-lg"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-brandTextHeader font-sansHeader font-bold text-lg mb-1">Executive Summary</h3>
+                                <p class="text-brandTextBody text-sm leading-relaxed font-sansBody">
+                                    The Video Analyzer platform converts raw camera streams and historical video/image uploads into direct operational insights. Scoped strictly under tenant isolation, the system uses YOLO26 + ByteTrack and deep face recognition to enable real-time detection, loitering alerts, zone occupancy counting, and rapid face searches across indexed database collections.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==========================================
+             SLIDE 2: Platform & Feature Architecture Grid
+             ========================================== -->
+        <div class="slide" id="slide-2">
+            <h2 class="slide-title-marker font-sansHeader text-[36px] font-extrabold text-brandTextHeader tracking-tight mb-8">
+                Platform &amp; Feature Architecture
+            </h2>
+            
+            <div class="grid grid-cols-4 gap-4 flex-grow items-stretch my-auto">
+                <!-- Column 1: Core Stream Ingestion -->
+                <div class="bg-gray-900/40 border border-white/5 rounded-2xl p-5 flex flex-col justify-between">
+                    <div>
+                        <div class="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-xl flex items-center justify-center mb-4">
+                            <i class="fa-solid fa-video text-sky-400"></i>
+                        </div>
+                        <h3 class="text-brandTextHeader font-sansHeader font-bold text-[18px] mb-2">Real-Time Ingestion</h3>
+                        <p class="text-brandTextBody text-[13px] leading-relaxed mb-4 font-sansBody">
+                            Continuous data acquisition across high-definition RTSP, IP/CCTV cameras, and historical video/photo uploads.
+                        </p>
+                    </div>
+                    <ul class="space-y-2 border-t border-white/5 pt-4">
+                        <li class="flex items-start gap-2 text-xs text-brandTextBody">
+                            <span class="text-brandSuccess mt-0.5"><i class="fa-solid fa-arrow-right text-[10px]"></i></span>
+                            <div>
+                                <strong>Multi-Stream Sync</strong>
+                                <span class="block text-[11px] text-brandTextMuted font-mono">Asynchronous Kafka Event Queues</span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- Column 2: Cognitive Detection Tracking -->
+                <div class="bg-gray-900/40 border border-white/5 rounded-2xl p-5 flex flex-col justify-between border-t-2 border-t-brandAccent">
+                    <div>
+                        <div class="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-xl flex items-center justify-center mb-4">
+                            <i class="fa-solid fa-microchip text-sky-400"></i>
+                        </div>
+                        <h3 class="text-brandTextHeader font-sansHeader font-bold text-[18px] mb-2">Cognitive Tracking</h3>
+                        <p class="text-brandTextBody text-[13px] leading-relaxed mb-4 font-sansBody">
+                            Simultaneous detection and localization of physical activities, visitor profiles, and path trajectories.
+                        </p>
+                    </div>
+                    <ul class="space-y-2 border-t border-white/5 pt-4">
+                        <li class="flex items-start gap-2 text-xs text-brandTextBody">
+                            <span class="text-brandSuccess mt-0.5"><i class="fa-solid fa-arrow-right text-[10px]"></i></span>
+                            <div>
+                                <strong>Spatial Localization</strong>
+                                <span class="block text-[11px] text-brandTextMuted font-mono">YOLO26 + ByteTrack Trackers</span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- Column 3: Space Behavioral Analysis -->
+                <div class="bg-gray-900/40 border border-white/5 rounded-2xl p-5 flex flex-col justify-between">
+                    <div>
+                        <div class="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-xl flex items-center justify-center mb-4">
+                            <i class="fa-solid fa-chart-line text-sky-400"></i>
+                        </div>
+                        <h3 class="text-brandTextHeader font-sansHeader font-bold text-[18px] mb-2">Behavioral Insights</h3>
+                        <p class="text-brandTextBody text-[13px] leading-relaxed mb-4 font-sansBody">
+                            Analytical rendering of visitor occupancy trends, dwell-times, zone activity, and entry/exit flow.
+                        </p>
+                    </div>
+                    <ul class="space-y-2 border-t border-white/5 pt-4">
+                        <li class="flex items-start gap-2 text-xs text-brandTextBody">
+                            <span class="text-brandSuccess mt-0.5"><i class="fa-solid fa-arrow-right text-[10px]"></i></span>
+                            <div>
+                                <strong>Analytical Modeling</strong>
+                                <span class="block text-[11px] text-brandTextMuted font-mono">Occupancy, Dwell &amp; Flow Analytics</span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- Column 4: Unified Ecosystem Sync -->
+                <div class="bg-gray-900/40 border border-white/5 rounded-2xl p-5 flex flex-col justify-between">
+                    <div>
+                        <div class="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-xl flex items-center justify-center mb-4">
+                            <i class="fa-solid fa-bell text-sky-400"></i>
+                        </div>
+                        <h3 class="text-brandTextHeader font-sansHeader font-bold text-[18px] mb-2">Multi-Channel Alerts</h3>
+                        <p class="text-brandTextBody text-[13px] leading-relaxed mb-4 font-sansBody">
+                            Immediate notification dispatch to administrators and operators when rules or thresholds are breached.
+                        </p>
+                    </div>
+                    <ul class="space-y-2 border-t border-white/5 pt-4">
+                        <li class="flex items-start gap-2 text-xs text-brandTextBody">
+                            <span class="text-brandSuccess mt-0.5"><i class="fa-solid fa-arrow-right text-[10px]"></i></span>
+                            <div>
+                                <strong>Notification Pipelines</strong>
+                                <span class="block text-[11px] text-brandTextMuted font-mono">Email, Twilio SMS &amp; WhatsApp</span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==========================================
+             SLIDE 3: The Market/Clinical Problem Space
+             ========================================== -->
+        <div class="slide" id="slide-3">
+            <h2 class="slide-title-marker font-sansHeader text-[36px] font-extrabold text-brandTextHeader tracking-tight mb-8">
+                The Operational Problem Space
+            </h2>
+            
+            <div class="flex-grow flex flex-col justify-center gap-5">
+                <!-- Problem Item 1 -->
+                <div class="bg-red-500/5 border-l-4 border-l-red-500 border border-white/5 rounded-r-2xl p-5">
+                    <div class="flex items-start gap-4">
+                        <div class="text-red-400 text-xl mt-1 shrink-0">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-brandTextHeader font-sansHeader font-bold text-lg mb-1">CCTV Surveillance Data Vacuum</h3>
+                            <p class="text-brandTextBody text-sm leading-relaxed font-sansBody">
+                                Over 95% of corporate video feeds remain completely unreviewed, resulting in petabytes of expensive spatial data and visitor records being lost, while manual face matching or event tracking takes hours of forensic scanning.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Problem Item 2 -->
+                <div class="bg-red-500/5 border-l-4 border-l-red-500 border border-white/5 rounded-r-2xl p-5">
+                    <div class="flex items-start gap-4">
+                        <div class="text-red-400 text-xl mt-1 shrink-0">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-brandTextHeader font-sansHeader font-bold text-lg mb-1">High Friction Event &amp; Acknowledgment Workflows</h3>
+                            <p class="text-brandTextBody text-sm leading-relaxed font-sansBody">
+                                Sifting through raw streams manually to track occupancy limits, loitering infractions, or restricted zone intrusions incurs high human error rates, operational fatigue, and delayed security response latencies.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Problem Item 3 -->
+                <div class="bg-red-500/5 border-l-4 border-l-red-500 border border-white/5 rounded-r-2xl p-5">
+                    <div class="flex items-start gap-4">
+                        <div class="text-red-400 text-xl mt-1 shrink-0">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-brandTextHeader font-sansHeader font-bold text-lg mb-1">Absent Multi-Tenant Isolation &amp; Privacy Controls</h3>
+                            <p class="text-brandTextBody text-sm leading-relaxed font-sansBody">
+                                Traditional physical locations lack structured visitor flow analytics, while legacy analytics systems lack tenant-level database isolation, role-based guardrails, and secure API-driven audit logs.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==========================================
+             SLIDE 4: Strategic Engineering (Challenges & Decisions Matrix)
+             ========================================== -->
+        <div class="slide" id="slide-4">
+            <h2 class="slide-title-marker font-sansHeader text-[36px] font-extrabold text-brandTextHeader tracking-tight mb-8">
+                Strategic Engineering Decisions
+            </h2>
+            
+            <div class="grid grid-cols-2 gap-8 flex-grow items-stretch my-auto">
+                <!-- Left Panel: Technical Challenges -->
+                <div class="bg-gray-900/40 border border-white/5 border-l-4 border-l-red-500 rounded-r-2xl p-6 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center gap-3 mb-5 border-b border-white/5 pb-4">
+                            <i class="fa-solid fa-triangle-exclamation text-red-400 text-xl"></i>
+                            <h3 class="text-brandTextHeader font-sansHeader font-bold text-[20px]">Compute &amp; Continuity Obstacles</h3>
+                        </div>
+                        
+                        <div class="space-y-5">
+                            <div>
+                                <h5 class="text-brandTextHeader font-sansHeader font-semibold text-sm mb-1.5">Intense Real-Time Inference Costs</h5>
+                                <p class="text-brandTextBody text-[13px] leading-relaxed font-sansBody">
+                                    Executing deep computer vision models frame-by-frame on high-resolution, high-FPS video uploads triggers high CPU/GPU compute costs and bottlenecks background task execution.
+                                </p>
+                            </div>
+                            
+                            <div>
+                                <h5 class="text-brandTextHeader font-sansHeader font-semibold text-sm mb-1.5">Path Discontinuity Across Streams</h5>
+                                <p class="text-brandTextBody text-[13px] leading-relaxed font-sansBody">
+                                    Standard object tracking algorithms assign new tracker IDs to the same target if bounding boxes overlap poorly or if targets exit the frame briefly, producing fragmented tracking records.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <span class="text-xs text-brandTextMuted font-mono uppercase mt-4">Security Auditing Stage: JWT / RBAC Active</span>
+                </div>
+
+                <!-- Right Panel: Strategic Solutions -->
+                <div class="bg-gray-900/40 border border-white/5 border-l-4 border-l-brandSuccess rounded-r-2xl p-6 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center gap-3 mb-5 border-b border-white/5 pb-4">
+                            <i class="fa-solid fa-circle-check text-brandSuccess text-xl"></i>
+                            <h3 class="text-brandTextHeader font-sansHeader font-bold text-[20px]">Engineered Solutions</h3>
+                        </div>
+                        
+                        <div class="space-y-5">
+                            <div>
+                                <h5 class="text-brandTextHeader font-sansHeader font-semibold text-sm mb-1.5">Downscaling &amp; Keyframe Inference</h5>
+                                <p class="text-brandTextBody text-[13px] leading-relaxed font-sansBody">
+                                    Implemented dynamic frame step sampling (interval-based skipping) and automatic image downscaling (640px max dimension limit) inside Celery task workers to optimize inference cycles.
+                                </p>
+                            </div>
+                            
+                            <div>
+                                <h5 class="text-brandTextHeader font-sansHeader font-semibold text-sm mb-1.5">PostgreSQL + pgvector Indexing</h5>
+                                <p class="text-brandTextBody text-[13px] leading-relaxed font-sansBody">
+                                    Built a unified face tracking catalog storing 512-dimension visual features natively in PostgreSQL with pgvector, allowing sub-second cosine distance searches scoped to each tenant.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <span class="text-xs text-brandSuccess font-mono uppercase mt-4">Database: PostgreSQL + pgvector + Redis Cache</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==========================================
+             SLIDE 5: Performance Scorecard & Impact Metrics
+             ========================================== -->
+        <div class="slide" id="slide-5">
+            <h2 class="slide-title-marker font-sansHeader text-[36px] font-extrabold text-brandTextHeader tracking-tight mb-8">
+                System Performance Scorecard
+            </h2>
+            
+            <div class="grid grid-cols-4 gap-6 flex-grow items-stretch my-auto">
+                <!-- Metric Card 1 -->
+                <div class="bg-gradient-to-b from-gray-900/60 to-gray-900/30 border border-white/5 rounded-2xl p-6 flex flex-col justify-center text-center">
+                    <div class="text-[54px] font-sansHeader font-extrabold gradient-accent-text mb-2 leading-none">
+                        YOLO26
+                    </div>
+                    <h4 class="text-brandTextHeader font-sansHeader font-bold text-sm mb-2">Core Detection Pipeline</h4>
+                    <p class="text-brandTextBody text-xs leading-relaxed font-sansBody">
+                        High-fidelity person detection and visual tracking using YOLO26 weights combined with ByteTrack.
+                    </p>
+                </div>
+
+                <!-- Metric Card 2 -->
+                <div class="bg-gradient-to-b from-gray-900/60 to-gray-900/30 border border-white/5 rounded-2xl p-6 flex flex-col justify-center text-center">
+                    <div class="text-[54px] font-sansHeader font-extrabold gradient-success-text mb-2 leading-none">
+                        Celery
+                    </div>
+                    <h4 class="text-brandTextHeader font-sansHeader font-bold text-sm mb-2">Background Scale</h4>
+                    <p class="text-brandTextBody text-xs leading-relaxed font-sansBody">
+                        Asynchronous processing of long-duration media files, video face indexing, and scheduled reporting tasks.
+                    </p>
+                </div>
+
+                <!-- Metric Card 3 -->
+                <div class="bg-gradient-to-b from-gray-900/60 to-gray-900/30 border border-white/5 rounded-2xl p-6 flex flex-col justify-center text-center">
+                    <div class="text-[54px] font-sansHeader font-extrabold gradient-accent-text mb-2 leading-none">
+                        &lt; 1s
+                    </div>
+                    <h4 class="text-brandTextHeader font-sansHeader font-bold text-sm mb-2">Search Latency</h4>
+                    <p class="text-brandTextBody text-xs leading-relaxed font-sansBody">
+                        Cosine distance search speed for matching reference selfie uploads across millions of indexed face embeddings.
+                    </p>
+                </div>
+
+                <!-- Metric Card 4 -->
+                <div class="bg-gradient-to-b from-gray-900/60 to-gray-900/30 border border-white/5 rounded-2xl p-6 flex flex-col justify-center text-center">
+                    <div class="text-[54px] font-sansHeader font-extrabold gradient-success-text mb-2 leading-none">
+                        20+
+                    </div>
+                    <h4 class="text-brandTextHeader font-sansHeader font-bold text-sm mb-2">Report Templates</h4>
+                    <p class="text-brandTextBody text-xs leading-relaxed font-sansBody">
+                        Diverse analytical PDF/Excel report templates generated on-demand or automatically scheduled via Celery Beat.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Slide Controller Logic -->
+    <script>
+        let currentSlideIndex = 1;
+        const totalSlides = 5;
+
+        // Function to scale layout to prevent presentation breaks on smaller displays
+        function handleScaling() {
+            const viewport = document.getElementById('presentation-viewport');
+            const availableWidth = window.innerWidth - 32; // match margin space
+            const availableHeight = window.innerHeight - 100; // room for top controls
+            
+            const scaleX = availableWidth / 1280;
+            const scaleY = availableHeight / 720;
+            const optimalScale = Math.min(scaleX, scaleY, 1); // limit scale up to standard size
+            
+            viewport.style.transform = `scale(${optimalScale})`;
+            viewport.style.transformOrigin = 'center center';
+        }
+
+        // Initialize display and scaling
+        window.addEventListener('resize', handleScaling);
+        window.addEventListener('load', () => {
+            handleScaling();
+            updateSlideView();
+        });
+
+        // Controller functions to toggle active classes
+        function updateSlideView() {
+            for (let i = 1; i <= totalSlides; i++) {
+                const slideEl = document.getElementById(`slide-${i}`);
+                if (i === currentSlideIndex) {
+                    slideEl.classList.add('active-slide');
+                } else {
+                    slideEl.classList.remove('active-slide');
+                }
+            }
+            
+            // Render text indicators
+            document.getElementById('slide-indicators').innerText = `Slide ${currentSlideIndex} / ${totalSlides}`;
+        }
+
+        function nextSlide() {
+            if (currentSlideIndex < totalSlides) {
+                currentSlideIndex++;
+                updateSlideView();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlideIndex > 1) {
+                currentSlideIndex--;
+                updateSlideView();
+            }
+        }
+
+        // Keyboard mapping triggers for consulting presentations
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                prevSlide();
+            }
+        });
+    </script>
+
+</body>
+</html>
