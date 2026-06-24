@@ -3,6 +3,21 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 
+class FirstTimeVisitorDetail(BaseModel):
+    identity_id: UUID
+    photo_path: Optional[str] = None
+    first_seen: float
+    last_seen: float
+
+    @computed_field
+    @property
+    def dwell_time(self) -> float:
+        return round(self.last_seen - self.first_seen, 2)
+
+    class Config:
+        from_attributes = True
+
+
 class FaceAnalyticsSessionResponse(BaseModel):
     id: UUID
     tenant_id: UUID
@@ -19,6 +34,7 @@ class FaceAnalyticsSessionResponse(BaseModel):
     unique_person_count: Optional[int] = None
     total_person_count: Optional[int] = None
     first_time_visitor_count: Optional[int] = None
+    first_time_visitors: Optional[List[FirstTimeVisitorDetail]] = None
     peak_occupancy: Optional[int] = None
     average_occupancy: Optional[float] = None
     entry_count: Optional[int] = None

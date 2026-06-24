@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.faceanalytics.repository import FaceAnalyticsRepository
 from modules.peopleanalytics.model import PeopleAnalyticsSession, EmployeeAttendanceLog, UploadedVideo
-from modules.faceanalytics.schema import VisitorAnalyticsReport, VideoProcessItem, SessionDetectedPerson
+from modules.faceanalytics.schema import VisitorAnalyticsReport, VideoProcessItem, SessionDetectedPerson, FirstTimeVisitorDetail
 from modules.users.model import User
 
 FACE_INPUTS_DIR = os.path.join("storage", "face_analytics_inputs")
@@ -158,6 +158,23 @@ class FaceAnalyticsService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Analytics session not found or unauthorized access."
             )
+        
+        # Fetch first-time visitors and attach to session
+        first_time_occs = await self.repo.get_session_first_time_visitors(session_id)
+        from collections import defaultdict
+        grouped_visitors = defaultdict(list)
+        for occ in first_time_occs:
+            grouped_visitors[occ.identity_id].append(occ)
+
+        session.first_time_visitors = [
+            FirstTimeVisitorDetail(
+                identity_id=identity_id,
+                photo_path=next((occ.crop_path for occ in occs if occ.crop_path), None),
+                first_seen=min(occ.first_seen for occ in occs),
+                last_seen=max(occ.last_seen for occ in occs)
+            )
+            for identity_id, occs in grouped_visitors.items()
+        ]
         return session
 
     async def get_all_sessions(self, tenant_id: uuid.UUID) -> List[PeopleAnalyticsSession]:
