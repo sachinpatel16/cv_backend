@@ -1,7 +1,7 @@
 import os
 import uuid
 import cv2
-cv2.setNumThreads(0)
+
 
 import numpy as np
 from sqlalchemy import select
@@ -15,7 +15,7 @@ from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
 from modules.employees.model import Employee
 from modules.faceanalytics.repository import FaceAnalyticsRepository
 from modules.peoplecount.tracker import KalmanFilter
-
+cv2.setNumThreads(0)
 FACE_OUTPUTS_DIR = os.path.join("storage", "face_analytics_outputs")
 os.makedirs(FACE_OUTPUTS_DIR, exist_ok=True)
 
@@ -344,9 +344,6 @@ def process_face_analytics_task(
                             if not is_full_face:
                                 continue
 
-                            # 4. Occlusion filter (rejects faces with covered nose/mouth)
-                            if kps and is_face_occluded(frame, kps):
-                                continue
 
                             fx1, fy1 = max(0, fx1), max(0, fy1)
                             fx2, fy2 = min(orig_width, fx2), min(orig_height, fy2)
@@ -473,17 +470,15 @@ def process_face_analytics_task(
                 from datetime import datetime, timezone
                 now_ts = datetime.now(timezone.utc)
 
-                # Filter out very short, spurious tracks (e.g. tracks seen in less than 2 processed frames)
+                # 1. Filter out very short, spurious tracks (e.g. tracks seen in less than 2 processed frames)
                 MIN_TRACK_OCCURRENCES = 2
-                completed_occurrences = []
-                local_db_identities = {}
-
+                valid_tracks = {}
                 for face_id, track in list(tracker.tracks.items()):
-                    if track["occurrences"] < MIN_TRACK_OCCURRENCES:
-                        del tracker.tracks[face_id]
-                        continue
+                    if track["occurrences"] >= MIN_TRACK_OCCURRENCES:
+                        valid_tracks[face_id] = track
 
-                    # Retrieve database PersonIdentity ID
+                # 2. Resolve database PersonIdentity IDs for all valid tracks
+                for face_id, track in valid_tracks.items():
                     visitor_id = track["matched_id"]
                     if visitor_id is None:
                         if track["embedding"] is not None:
@@ -517,15 +512,32 @@ def process_face_analytics_task(
                             track["matched_id"] = visitor_id
                             track["label"] = "New Visitor"
 
-                    # Save crop if available
+                # 3. Group tracks by resolved visitor_id to save only the single best crop per unique visitor
+                from collections import defaultdict
+                tracks_by_visitor = defaultdict(list)
+                for face_id, track in valid_tracks.items():
+                    visitor_id = track["matched_id"]
+                    if visitor_id is not None:
+                        tracks_by_visitor[visitor_id].append(track)
+
+                visitor_crop_paths = {}
+                for visitor_id, v_tracks in tracks_by_visitor.items():
+                    # Pick the track with the largest crop area
+                    best_track = max(v_tracks, key=lambda t: t.get("best_crop_area", 0))
                     crop_path = None
-                    if track["best_crop"] is not None:
+                    if best_track["best_crop"] is not None:
                         crop_filename = f"{uuid.uuid4()}.jpg"
                         user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
                         os.makedirs(user_crops_dir, exist_ok=True)
                         crop_path = os.path.join(user_crops_dir, crop_filename)
-                        cv2.imwrite(crop_path, track["best_crop"])
+                        cv2.imwrite(crop_path, best_track["best_crop"])
+                    visitor_crop_paths[visitor_id] = crop_path
 
+                # 4. Prepare and write completed occurrences
+                completed_occurrences = []
+                for face_id, track in valid_tracks.items():
+                    visitor_id = track["matched_id"]
+                    crop_path = visitor_crop_paths.get(visitor_id) if visitor_id else None
                     completed_occurrences.append({
                         "session_id": session.id,
                         "identity_id": visitor_id,
@@ -552,11 +564,24 @@ def process_face_analytics_task(
                 total_detected = len(completed_occurrences)
 
                 # Calculate new visitor counts
-                new_visitor_ids = {t["matched_id"] for t in tracker.tracks.values() if t.get("label") == "New Visitor" and t["matched_id"] is not None}
+                new_visitor_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("label") == "New Visitor" and t["matched_id"] is not None}
                 first_time_visitor_count = len(new_visitor_ids)
 
                 total_occupancy_sum = sum(h["occupancy"] for h in occupancy_history)
                 avg_occupancy = round(total_occupancy_sum / len(occupancy_history), 2) if occupancy_history else 0.0
+
+                # Downsample occupancy_timeline to 1-second intervals
+                downsampled_timeline = []
+                if occupancy_history:
+                    from collections import defaultdict
+                    by_second = defaultdict(list)
+                    for o in occupancy_history:
+                        sec_int = int(o["time_sec"])
+                        by_second[sec_int].append(o["occupancy"])
+                        
+                    for sec in sorted(by_second.keys()):
+                        avg_occ = int(round(np.mean(by_second[sec])))
+                        downsampled_timeline.append({"time_sec": sec, "occupancy": avg_occ})
 
                 # Update database session results
                 await repo.update_session_results(
@@ -568,7 +593,7 @@ def process_face_analytics_task(
                     average_occupancy=avg_occupancy,
                     entry_count=None,
                     exit_count=None,
-                    occupancy_timeline=occupancy_history,
+                    occupancy_timeline=downsampled_timeline,
                     output_video_path=output_path
                 )
                 session.completed_at = datetime.now(timezone.utc)

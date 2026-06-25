@@ -783,7 +783,7 @@ def index_objectcount_task(
                             H = np.eye(2, 3)
 
                     # Extract Re-ID appearance features (filtered by reid_classes to match POC)
-                    reid_interval = configs.get("reid_interval", 5)
+                    reid_interval = configs.get("reid_interval", 2)
                     is_reid_frame = (frame_idx % reid_interval == 0)
                     if reid_extractor and detections and is_reid_frame:
                         crops = []
@@ -834,7 +834,7 @@ def index_objectcount_task(
                             trackers[class_name] = BoTSORTTracker(
                                 track_thresh=confidence_threshold,
                                 match_thresh=0.8,
-                                track_buffer=track_buffer,
+                                track_buffer=max(track_buffer, 300),
                                 reid_alpha=0.5,
                                 reid_max_dist=0.55
                             )
@@ -843,7 +843,7 @@ def index_objectcount_task(
                         frame_tracks.extend(active_tracks)
 
                     # Dynamic Gender Classification
-                    if gender_classifier and frame_tracks:
+                    if configs.get("classify_gender", False) and frame_tracks:
                         h_f, w_f, _ = frame.shape
                         for track in frame_tracks:
                             if track.class_name == "person":
@@ -863,13 +863,59 @@ def index_objectcount_task(
                                                 head_y2 = max(y1 + 1, min(head_y2, y2))
                                                 head_crop = frame[y1:head_y2, x1:x2]
                                                 
-                                                gender_res = gender_classifier.predict(head_crop)
-                                                track.gender_history.append((gender_res["gender"], gender_res["confidence"]))
-                                                genders = [g for g, c in track.gender_history]
-                                                from collections import Counter
-                                                track.gender = Counter(genders).most_common(1)[0][0]
-                                                matching_confs = [c for g, c in track.gender_history if g == track.gender]
-                                                track.gender_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
+                                                # Use the high-quality face detector to verify if a face is actually visible
+                                                _, encoded_head = cv2.imencode(".jpg", head_crop)
+                                                head_bytes = encoded_head.tobytes()
+                                                detected_faces = face_rec_service.extract_faces(head_bytes)
+                                                
+                                                if detected_faces:
+                                                    valid_faces = []
+                                                    for face in detected_faces:
+                                                        fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                                                        
+                                                        # 1. Relaxed size filter (ignores tiny/distant blurry faces)
+                                                        if (fx2 - fx1) < 28 or (fy2 - fy1) < 28:
+                                                            continue
+                                                            
+                                                        # 2. Relaxed confidence filter (ignores false face detections)
+                                                        if face.get("det_score", 0.0) < 0.60:
+                                                            continue
+                                                            
+                                                        # 3. Keypoints containment filter (ensures full face is visible)
+                                                        kps = face.get("kps")
+                                                        is_full_face = True
+                                                        if kps:
+                                                            margin_x = int((fx2 - fx1) * 0.05)
+                                                            margin_y = int((fy2 - fy1) * 0.05)
+                                                            limit_x1 = fx1 - margin_x
+                                                            limit_x2 = fx2 + margin_x
+                                                            limit_y1 = fy1 - margin_y
+                                                            limit_y2 = fy2 + margin_y
+                                                            
+                                                            for kp in kps:
+                                                                kp_x, kp_y = kp
+                                                                if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
+                                                                    is_full_face = False
+                                                                    break
+                                                        if not is_full_face:
+                                                            continue
+                                                            
+                                                        # (Occlusion filter removed to prevent false-positives on beards/shadows)
+                                                        valid_faces.append(face)
+                                                    
+                                                    if valid_faces:
+                                                        # Use the highly accurate built-in landmark-aligned gender prediction
+                                                        largest_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+                                                        gender_val = largest_face.get("gender")
+                                                        if gender_val is not None:
+                                                            gender_label = "Male" if gender_val == 1 else "Female"
+                                                            track.gender_history.append((gender_label, largest_face.get("det_score", 0.90)))
+                                                            
+                                                            genders = [g for g, c in track.gender_history]
+                                                            from collections import Counter
+                                                            track.gender = Counter(genders).most_common(1)[0][0]
+                                                            matching_confs = [c for g, c in track.gender_history if g == track.gender]
+                                                            track.gender_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
 
                     # Accumulate frame counts and track histories
                     frame_objects_counts.append(len(frame_tracks))

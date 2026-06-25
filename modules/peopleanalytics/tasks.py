@@ -121,8 +121,8 @@ async def _process_image_job(
         if embedding is None:
             continue
 
-        # Search visitors
-        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+        # Search visitors (specifically class_id=0 for body ReID)
+        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
         if match_vis:
             visitor, sim = match_vis
             crop_path = None
@@ -327,8 +327,8 @@ async def _process_video_job(
                     if best_crop is not None:
                         embedding = extractor.get_embedding(best_crop)
                         if embedding is not None:
-                            # Match against generic visitors
-                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                            # Match against generic visitors (specifically class_id=0 for body ReID)
+                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
                             if match_vis:
                                 visitor, sim = match_vis
                                 track_info.update({

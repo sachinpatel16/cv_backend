@@ -95,8 +95,6 @@ class FaceAnalyticsService:
         self,
         tenant_id: uuid.UUID,
         videos: List[VideoProcessItem],
-        global_line_start: Optional[List[int]] = None,
-        global_line_end: Optional[List[int]] = None,
         global_similarity_threshold: float = 0.70,
         global_confidence_threshold: float = 0.3,
         user_id: Optional[uuid.UUID] = None
@@ -116,8 +114,6 @@ class FaceAnalyticsService:
             filepath = item.video_path
             
             # Determine parameters
-            line_start = item.line_start if item.line_start is not None else global_line_start
-            line_end = item.line_end if item.line_end is not None else global_line_end
             similarity_threshold = item.similarity_threshold if item.similarity_threshold is not None else global_similarity_threshold
             confidence_threshold = item.confidence_threshold if item.confidence_threshold is not None else global_confidence_threshold
 
@@ -127,8 +123,8 @@ class FaceAnalyticsService:
                 tenant_id=tenant_id,
                 video_name=video_name,
                 video_path=filepath,
-                line_start=line_start,
-                line_end=line_end,
+                line_start=None,
+                line_end=None,
                 similarity_threshold=similarity_threshold,
                 confidence_threshold=confidence_threshold
             )
@@ -140,8 +136,8 @@ class FaceAnalyticsService:
             process_face_analytics_task.delay(
                 str(session.id),
                 filepath,
-                line_start,
-                line_end,
+                None,
+                None,
                 similarity_threshold,
                 confidence_threshold,
                 str(user_id) if user_id else None
@@ -234,15 +230,24 @@ class FaceAnalyticsService:
                 last_seen=log.last_seen
             ))
 
-        # Add visitors
+        # Add visitors (Grouped by identity_id to prevent duplicates)
+        from collections import defaultdict
+        grouped_visitors = defaultdict(list)
         for occ in occurrences:
+            grouped_visitors[occ.identity_id].append(occ)
+
+        for identity_id, occs in grouped_visitors.items():
+            photo_path = next((occ.crop_path for occ in occs if occ.crop_path), None)
+            first_seen = min(occ.first_seen for occ in occs)
+            last_seen = max(occ.last_seen for occ in occs)
+            
             people.append(SessionDetectedPerson(
-                identity_id=occ.identity_id,
+                identity_id=identity_id,
                 type="visitor",
-                name=f"Visitor #{str(occ.identity_id)[:4]}",
-                photo_path=occ.crop_path,
-                first_seen=occ.first_seen,
-                last_seen=occ.last_seen
+                name=f"Visitor #{str(identity_id)[:4]}",
+                photo_path=photo_path,
+                first_seen=first_seen,
+                last_seen=last_seen
             ))
 
         return people
