@@ -397,6 +397,25 @@ async def _process_video_job(
     cap.release()
     output_writer.release()
 
+    # Transcode output video to browser-compatible H.264 format using FFmpeg
+    import subprocess
+    h264_output_path = output_path.replace(".mp4", "_h264.mp4")
+    try:
+        cmd = [
+            "ffmpeg",
+            "-i", output_path,
+            "-vcodec", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-acodec", "aac",
+            "-y",
+            h264_output_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(h264_output_path):
+            os.replace(h264_output_path, output_path)
+    except Exception as e:
+        print(f"FFmpeg transcoding failed (falling back to raw mp4v): {e}")
+
     # Filter out very short, spurious tracks (e.g. tracks that lasted less than 10 frames)
     # BUT keep those that crossed the line so we can resolve their identity for crossing logs
     MIN_TRACK_FRAMES = 10
