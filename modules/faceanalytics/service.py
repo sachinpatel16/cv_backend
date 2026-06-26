@@ -6,7 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.faceanalytics.repository import FaceAnalyticsRepository
 from modules.peopleanalytics.model import PeopleAnalyticsSession, EmployeeAttendanceLog, UploadedVideo
-from modules.faceanalytics.schema import VisitorAnalyticsReport, VideoProcessItem, SessionDetectedPerson, FirstTimeVisitorDetail
+from modules.faceanalytics.schema import (
+    VisitorAnalyticsReport,
+    VideoProcessItem,
+    SessionDetectedPerson,
+    FirstTimeVisitorDetail,
+    DetectedEmployeeDetail
+)
 from modules.users.model import User
 
 FACE_INPUTS_DIR = os.path.join("storage", "face_analytics_inputs")
@@ -171,6 +177,25 @@ class FaceAnalyticsService:
             )
             for identity_id, occs in grouped_visitors.items()
         ]
+
+        # Fetch detected employees and attach to session
+        from modules.employees.service import EmployeeService
+        emp_service = EmployeeService(self.db)
+        attendance_logs = await emp_service.get_session_attendance(session_id, tenant_id)
+        
+        session.detected_employees = [
+            DetectedEmployeeDetail(
+                id=log.employee_id,
+                first_name=log.employee.first_name,
+                last_name=log.employee.last_name,
+                employee_code=log.employee.employee_code,
+                photo_path=log.employee.photo_path,
+                first_seen=log.first_seen,
+                last_seen=log.last_seen
+            )
+            for log in attendance_logs
+        ]
+
         return session
 
     async def get_all_sessions(self, tenant_id: uuid.UUID) -> List[PeopleAnalyticsSession]:
