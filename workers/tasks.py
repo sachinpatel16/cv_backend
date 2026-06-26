@@ -302,7 +302,7 @@ def index_peoplecount_task(
     media_source_id_str: str,
     filepath: str,
     media_type: str,
-    min_track_frames: int = 300,
+    min_track_frames: int = 30,
     track_buffer: int = 150,
     confidence_threshold: float = 0.35
 ):
@@ -321,10 +321,11 @@ def index_peoplecount_task(
             
             repo = PeopleCountRepository(db)
             
-            # Load weights
-            weights_path = os.path.join("storage", "yolo26n.pt")
+            # Load weights (prefer yolo12n.pt for high accuracy and performance)
+            weights_path = os.path.join("models", "yolo12n.pt")
             if not os.path.exists(weights_path):
-                # Fallback to standard yolov8n if yolo26n.pt is missing
+                weights_path = os.path.join("storage", "yolo26n.pt")
+            if not os.path.exists(weights_path):
                 weights_path = "yolov8n.pt"
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -554,8 +555,12 @@ def index_objectcount_task(
             
             repo = ObjectCountRepository(db)
             
-            # Load weights
-            weights_path = os.path.join("storage", "yolo26n.pt")
+            # Load weights (prefer yolo12m.pt or yolo12n.pt over older models)
+            weights_path = os.path.join("models", "yolo12m.pt")
+            if not os.path.exists(weights_path):
+                weights_path = os.path.join("models", "yolo12n.pt")
+            if not os.path.exists(weights_path):
+                weights_path = os.path.join("storage", "yolo26n.pt")
             if not os.path.exists(weights_path):
                 weights_path = "yolov8n.pt"
 
@@ -598,13 +603,13 @@ def index_objectcount_task(
                     gmc = None
 
             confidence_threshold = configs.get("confidence_threshold", 0.35)
-            min_track_frames = configs.get("min_track_frames", 100)
+            min_track_frames = configs.get("min_track_frames", 20)
             track_buffer = configs.get("track_buffer", 150)
             classes_to_track = configs.get("classes_to_track")
             classify_vehicle = configs.get("classify_vehicle", False)
             classify_gender = configs.get("classify_gender", False)
             reid_classes = configs.get("reid_classes", ["person"])
-            imgsz = configs.get("imgsz", 480)
+            imgsz = configs.get("imgsz", 640)
 
             if media_type == "photo":
                 # Process photo
@@ -857,11 +862,22 @@ def index_objectcount_task(
                                             x2 = max(0, min(x2, w_f - 1))
                                             y2 = max(0, min(y2, h_f - 1))
                                             
+                                            box_w = x2 - x1
                                             box_h = y2 - y1
-                                            if (x2 - x1) > 0 and box_h > 0:
+                                            if box_w > 0 and box_h > 0:
                                                 head_y2 = y1 + int(box_h * 0.25)
                                                 head_y2 = max(y1 + 1, min(head_y2, y2))
-                                                head_crop = frame[y1:head_y2, x1:x2]
+                                                
+                                                # Crop center 60% of the body width to focus on the head and maintain near-square aspect ratio
+                                                center_x = x1 + box_w // 2
+                                                crop_w = int(box_w * 0.6)
+                                                hx1 = max(0, min(center_x - crop_w // 2, w_f - 1))
+                                                hx2 = max(0, min(center_x + crop_w // 2, w_f - 1))
+                                                
+                                                if hx2 > hx1:
+                                                    head_crop = frame[y1:head_y2, hx1:hx2]
+                                                else:
+                                                    head_crop = frame[y1:head_y2, x1:x2]
                                                 
                                                 gender_res = gender_classifier.predict(head_crop)
                                                 track.gender_history.append((gender_res["gender"], gender_res["confidence"]))

@@ -36,19 +36,48 @@ class FaceTracker:
         updated_tracks = {}
         matched_detections = set()
 
-        # 1. Associate detected faces with active tracks based on IoU
+        # 1. Associate detected faces with active tracks based on IoU + Embedding Cosine Similarity
         for face_id, track in list(self.tracks.items()):
-            best_iou = 0
             best_det_idx = -1
+            best_score = -1
+            
             for det_idx, det in enumerate(detected_faces):
                 if det_idx in matched_detections:
                     continue
+                
                 iou = self._calculate_iou(track["bbox"], det["bbox"])
-                if iou > best_iou:
-                    best_iou = iou
+                
+                sim = 0.0
+                if track["embedding"] is not None and det.get("embedding") is not None:
+                    t_emb = track["embedding"]
+                    d_emb = det["embedding"]
+                    t_norm = np.linalg.norm(t_emb)
+                    d_norm = np.linalg.norm(d_emb)
+                    if t_norm > 0 and d_norm > 0:
+                        sim = np.dot(t_emb, d_emb) / (t_norm * d_norm)
+                
+                # We classify as a match if:
+                # - Spatial IoU is strong: iou >= 0.4
+                # - Feature embedding similarity is strong: sim >= 0.65
+                # - Moderate combination of both: iou >= 0.2 and sim >= 0.55
+                is_match = False
+                match_score = 0.0
+                
+                if iou >= 0.4:
+                    is_match = True
+                    match_score = iou + sim * 0.5
+                elif sim >= 0.65:
+                    is_match = True
+                    match_score = sim + iou * 0.5
+                elif iou >= 0.2 and sim >= 0.55:
+                    is_match = True
+                    match_score = iou + sim
+                    
+                if is_match and match_score > best_score:
+                    best_score = match_score
                     best_det_idx = det_idx
 
-            if best_iou >= self.iou_threshold:
+            if best_det_idx != -1:
                 det = detected_faces[best_det_idx]
                 matched_detections.add(best_det_idx)
                 
@@ -89,6 +118,7 @@ class FaceTracker:
                 "embedding": det.get("embedding"),
                 "best_crop": det.get("crop"),
                 "matched": False,
+                "last_match_area": 0,
                 "matched_type": None,  # "employee" or "visitor"
                 "matched_id": None,    # employee_id or visitor_id
                 "label": f"Face #{self.next_id}",
@@ -223,31 +253,57 @@ def process_face_analytics_task(
                         if not track["active_in_current_frame"]:
                             continue
 
-                        # Resolve identity if embedding exists and not already matched
-                        if not track["matched"] and track["embedding"] is not None:
+                        # Resolve identity if embedding exists
+                        if track["embedding"] is not None:
                             from services.ai.math_utils import map_similarity_threshold, find_best_match_in_cache
                             mapped_threshold = map_similarity_threshold(similarity_threshold)
-                            match_local = find_best_match_in_cache(track["embedding"], local_reid_cache, mapped_threshold)
-                            if match_local:
-                                local_id, sim = match_local
-                                track["matched"] = True
-                                track["matched_type"] = "visitor"
-                                track["matched_id"] = local_id
-                                track["label"] = f"Person #{str(local_id)[:4]}"
-                            else:
-                                new_local_id = uuid.uuid4()
-                                local_reid_cache.append((new_local_id, track["embedding"]))
-                                track["matched"] = True
-                                track["matched_type"] = "visitor"
-                                track["matched_id"] = new_local_id
-                                track["label"] = f"Person #{str(new_local_id)[:4]}"
+                            
+                            if not track["matched"]:
+                                match_local = find_best_match_in_cache(track["embedding"], local_reid_cache, mapped_threshold)
+                                if match_local:
+                                    local_id, sim = match_local
+                                    track["matched"] = True
+                                    track["matched_type"] = "visitor"
+                                    track["matched_id"] = local_id
+                                    track["label"] = f"Person #{str(local_id)[:4]}"
+                                    track["last_match_area"] = track["best_crop_area"]
+                                else:
+                                    new_local_id = uuid.uuid4()
+                                    local_reid_cache.append((new_local_id, track["embedding"]))
+                                    track["matched"] = True
+                                    track["matched_type"] = "visitor"
+                                    track["matched_id"] = new_local_id
+                                    track["label"] = f"Person #{str(new_local_id)[:4]}"
+                                    track["last_match_area"] = track["best_crop_area"]
 
-                            # Update track color deterministically based on UUID BGR
-                            b = track["matched_id"].bytes
-                            r = b[0] % 200 + 55
-                            g = b[1] % 200 + 55
-                            bg = b[2] % 200 + 55
-                            track["color"] = (bg, g, r)
+                                # Update track color deterministically based on UUID BGR
+                                b = track["matched_id"].bytes
+                                r = b[0] % 200 + 55
+                                g = b[1] % 200 + 55
+                                bg = b[2] % 200 + 55
+                                track["color"] = (bg, g, r)
+                            elif track["best_crop_area"] > track.get("last_match_area", 0) * 1.3:
+                                # Re-evaluate visitor matching with a larger/clearer face crop
+                                match_local = find_best_match_in_cache(track["embedding"], local_reid_cache, mapped_threshold)
+                                if match_local:
+                                    local_id, sim = match_local
+                                    if track["matched_id"] != local_id:
+                                        track["matched_id"] = local_id
+                                        track["label"] = f"Person #{str(local_id)[:4]}"
+                                        # Update track color deterministically based on UUID BGR
+                                        b = local_id.bytes
+                                        r = b[0] % 200 + 55
+                                        g = b[1] % 200 + 55
+                                        bg = b[2] % 200 + 55
+                                        track["color"] = (bg, g, r)
+                                    track["last_match_area"] = track["best_crop_area"]
+                                else:
+                                    # Still unique, update the cached embedding to this higher quality one
+                                    track["last_match_area"] = track["best_crop_area"]
+                                    for idx, (lid, _) in enumerate(local_reid_cache):
+                                        if lid == track["matched_id"]:
+                                            local_reid_cache[idx] = (lid, track["embedding"])
+                                            break
 
                         # Draw box and label
                         tx1, ty1, tx2, ty2 = track["bbox"]

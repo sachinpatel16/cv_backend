@@ -305,6 +305,7 @@ async def _process_video_job(
                         "best_crop": crop if crop is not None and crop.size > 0 else None,
                         "best_crop_area": (x2 - x1) * (y2 - y1) if crop is not None and crop.size > 0 else 0,
                         "matched": False,
+                        "last_match_area": 0,
                         "frames_since_start": 1
                     }
                 else:
@@ -322,38 +323,73 @@ async def _process_video_job(
 
                 track_info = active_tracks[tracker_id]
                 # Match once the track reaches 10 frames of history
-                if not track_info["matched"] and track_info["frames_since_start"] >= 10:
-                    best_crop = track_info["best_crop"]
-                    if best_crop is not None:
-                        embedding = extractor.get_embedding(best_crop)
-                        if embedding is not None:
-                            # Match against generic visitors
-                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
-                            if match_vis:
-                                visitor, sim = match_vis
-                                track_info.update({
-                                    "type": "visitor",
-                                    "id": visitor.id,
-                                    "label": f"Visitor #{str(visitor.id)[:4]}",
-                                    "color": (0, 180, 255),
-                                    "matched": True
-                                })
-                                unique_seen_identities.add(f"visitor:{visitor.id}")
-                                # Keep database updated with new profile details
-                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
-                            else:
-                                # Create new anonymous identity
-                                visitor = await repo.create_person_identity(session.tenant_id)
-                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
-                                track_info.update({
-                                    "type": "visitor",
-                                    "id": visitor.id,
-                                    "label": "New Visitor",
-                                    "color": (0, 0, 255),
-                                    "matched": True
-                                })
-                                unique_seen_identities.add(f"visitor:{visitor.id}")
-                                first_time_visitors_count += 1
+                if track_info["frames_since_start"] >= 10:
+                    if not track_info["matched"]:
+                        best_crop = track_info["best_crop"]
+                        if best_crop is not None:
+                            embedding = extractor.get_embedding(best_crop)
+                            if embedding is not None:
+                                # Match against generic visitors
+                                match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                                if match_vis:
+                                    visitor, sim = match_vis
+                                    track_info.update({
+                                        "type": "visitor",
+                                        "id": visitor.id,
+                                        "label": f"Visitor #{str(visitor.id)[:4]}",
+                                        "color": (0, 180, 255),
+                                        "matched": True,
+                                        "last_match_area": track_info["best_crop_area"]
+                                    })
+                                    unique_seen_identities.add(f"visitor:{visitor.id}")
+                                    # Keep database updated with new profile details
+                                    await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                else:
+                                    # Create new anonymous identity
+                                    visitor = await repo.create_person_identity(session.tenant_id)
+                                    await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                    track_info.update({
+                                        "type": "visitor",
+                                        "id": visitor.id,
+                                        "label": "New Visitor",
+                                        "color": (0, 0, 255),
+                                        "matched": True,
+                                        "last_match_area": track_info["best_crop_area"]
+                                    })
+                                    unique_seen_identities.add(f"visitor:{visitor.id}")
+                                    first_time_visitors_count += 1
+                    elif track_info["best_crop_area"] > track_info["last_match_area"] * 1.3:
+                        # Re-evaluate with a significantly larger / clearer crop
+                        best_crop = track_info["best_crop"]
+                        if best_crop is not None:
+                            embedding = extractor.get_embedding(best_crop)
+                            if embedding is not None:
+                                match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                                if match_vis:
+                                    visitor, sim = match_vis
+                                    if track_info["id"] != visitor.id:
+                                        # If it was previously marked as "New Visitor", decrement new visitor counts
+                                        if track_info.get("label") == "New Visitor":
+                                            if first_time_visitors_count > 0:
+                                                first_time_visitors_count -= 1
+                                            if f"visitor:{track_info['id']}" in unique_seen_identities:
+                                                unique_seen_identities.remove(f"visitor:{track_info['id']}")
+                                        
+                                        track_info.update({
+                                            "id": visitor.id,
+                                            "label": f"Visitor #{str(visitor.id)[:4]}",
+                                            "color": (0, 180, 255)
+                                        })
+                                        unique_seen_identities.add(f"visitor:{visitor.id}")
+                                    
+                                    track_info["last_match_area"] = track_info["best_crop_area"]
+                                    await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                else:
+                                    # Still doesn't match any existing visitor, keep the current identity
+                                    # but update last_match_area and add the new higher quality embedding
+                                    track_info["last_match_area"] = track_info["best_crop_area"]
+                                    if track_info["id"] is not None:
+                                        await repo.create_person_embedding(identity_id=track_info["id"], embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
 
                 # Update line crossing
                 if line_counter:

@@ -1,6 +1,6 @@
 # Human Activity & Theft Detection API Documentation
 
-This module provides APIs for uploading media (photos/videos), configuring analysis settings (Region of Interest, detection rules for fall, aggression, intrusion, loitering, occupancy limits), and fetching detected alerts and summary statistics.
+This module provides APIs for uploading media (photos/videos), configuring analysis settings (Region of Interest, detection rules for falling, slipping, aggression, intrusion, loitering, occupancy limits, sleeping, walking), and fetching detected alerts and summary statistics.
 
 ---
 
@@ -74,7 +74,7 @@ Uploads multiple photos or videos to the database namespace. Newly uploaded file
       "id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
       "filename": "security_cam_entrance.mp4",
       "media_type": "video",
-      "filepath": "uploads/activity/security_cam_entrance.mp4",
+      "filepath": "storage/activity_media/e4f5a6b7-89ab-cdef-0123-456789abcdef.mp4",
       "status": "pending",
       "created_at": "2026-06-22T17:45:00.123456Z"
     }
@@ -108,7 +108,7 @@ None.
       "id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
       "filename": "security_cam_entrance.mp4",
       "media_type": "video",
-      "filepath": "uploads/activity/security_cam_entrance.mp4",
+      "filepath": "storage/activity_media/e4f5a6b7-89ab-cdef-0123-456789abcdef.mp4",
       "status": "completed",
       "created_at": "2026-06-22T17:45:00.123456Z"
     }
@@ -149,7 +149,7 @@ Retrieves detailed information and the current processing status of a single med
     "id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
     "filename": "security_cam_entrance.mp4",
     "media_type": "video",
-    "filepath": "uploads/activity/security_cam_entrance.mp4",
+    "filepath": "storage/activity_media/e4f5a6b7-89ab-cdef-0123-456789abcdef.mp4",
     "status": "pending",
     "created_at": "2026-06-22T17:45:00.123456Z"
   }
@@ -189,7 +189,7 @@ Manually triggers frame-by-frame activity detection models on the selected media
     "id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
     "filename": "security_cam_entrance.mp4",
     "media_type": "video",
-    "filepath": "uploads/activity/security_cam_entrance.mp4",
+    "filepath": "storage/activity_media/e4f5a6b7-89ab-cdef-0123-456789abcdef.mp4",
     "status": "processing",
     "created_at": "2026-06-22T17:45:00.123456Z"
   }
@@ -210,7 +210,7 @@ Soft deletes an uploaded activity media file, including all its associated confi
 | :--- | :--- | :--- | :--- |
 | `media_id` | `UUID` | Path | The unique identifier of the media source to delete. |
 
-#### Response (`StandardResponse[null]`)
+#### Response (`StandardResponse[None]`)
 * **HTTP Status Code:** `200 OK`
 
 #### Example Response
@@ -365,8 +365,8 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
 | Parameter | Type | In | Description |
 | :--- | :--- | :--- | :--- |
 | `media_id` | `UUID` | Query | *Optional.* Filter reports to a single uploaded media file. |
-| `activity_type` | `string` | Query | *Optional.* Filter by alert behavior: `"fall"`, `"aggression"`, `"intrusion"`, `"loitering"`, `"occupancy"`, `"sleeping"`, `"walking"`. |
-| `severity` | `string` | Query | *Optional.* Filter by severity: `"info"`, `"low"`, `"medium"`, `"high"`, `"critical"`. |
+| `activity_type` | `string` | Query | *Optional.* Filter by alert behavior: `"falling"`, `"slipping"`, `"roi_intrusion"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`, `"aggression"`. |
+| `severity` | `string` | Query | *Optional.* Filter by severity: `"info"`, `"warning"`, `"critical"`. |
 
 #### Response (`StandardResponse[List[ActivityAlertResponse]]`)
 * **HTTP Status Code:** `200 OK`
@@ -374,11 +374,11 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
   * **`id`** *(UUID)*: Unique identifier of the alert record.
   * **`activity_media_id`** *(UUID)*: Associated source media ID.
   * **`track_id`** *(integer | null)*: Persistent ID of the tracked target/person across frames.
-  * **`activity_type`** *(string)*: Type of violation detected (`"fall"`, `"aggression"`, etc.).
+  * **`activity_type`** *(string)*: Type of violation detected (`"falling"`, `"slipping"`, `"roi_intrusion"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`, `"aggression"`).
   * **`timestamp`** *(float)*: Time offset (in seconds) in the source video where the alert occurred.
   * **`bbox`** *(array[integer] | null)*: Bounding box array coordinates of the event `[x_min, y_min, x_max, y_max]`.
   * **`snapshot_path`** *(string | null)*: Relative server path to the visual snapshot frame capturing the alert.
-  * **`severity`** *(string)*: Threat severity level (`"low"`, `"medium"`, `"high"`, `"critical"`).
+  * **`severity`** *(string)*: Threat severity level (`"info"`, `"warning"`, `"critical"`).
   * **`created_at`** *(string)*: Datetime when the alert was captured and stored.
 
 #### Example Response
@@ -391,11 +391,11 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
       "id": "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
       "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
       "track_id": 14,
-      "activity_type": "intrusion",
+      "activity_type": "roi_intrusion",
       "timestamp": 8.42,
       "bbox": [120, 200, 310, 480],
-      "snapshot_path": "uploads/activity/snapshots/d9e8f7a6_intrusion_8.42.jpg",
-      "severity": "high",
+      "snapshot_path": "storage/activity_alerts/e4f5a6b7-89ab-cdef-0123-456789abcdef_roi_intrusion_track14_8420.jpg",
+      "severity": "warning",
       "created_at": "2026-06-22T17:45:15.543210Z"
     }
   ]
@@ -431,20 +431,19 @@ Provides aggregated totals of alerts scoped to your tenant. Useful for generatin
   "data": {
     "total_alerts": 15,
     "by_type": {
-      "intrusion": 8,
-      "fall": 2,
+      "roi_intrusion": 8,
+      "falling": 2,
+      "slipping": 0,
       "aggression": 1,
       "loitering": 1,
-      "occupancy": 0,
+      "occupancy_overlimit": 0,
       "sleeping": 2,
       "walking": 1
     },
     "by_severity": {
       "info": 3,
-      "low": 1,
-      "medium": 3,
-      "high": 8,
-      "critical": 0
+      "warning": 9,
+      "critical": 3
     }
   }
 }

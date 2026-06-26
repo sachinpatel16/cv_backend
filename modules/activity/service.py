@@ -155,7 +155,7 @@ class ActivityService:
             await self.db.commit()
 
             from modules.activity.tasks import process_activity_media_task
-            process_activity_media_task.delay(str(media_id), interval=1.0)
+            process_activity_media_task.delay(str(media_id), interval=0.033)
         except Exception as e:
             await self.repo.update_media_status(media_id, "failed")
             await self.db.commit()
@@ -182,7 +182,7 @@ class ActivityService:
             await self.db.commit()
 
             from modules.activity.tasks import process_activity_media_task
-            process_activity_media_task.delay(str(media_id), interval=1.0)
+            process_activity_media_task.delay(str(media_id), interval=0.033)
         except Exception as e:
             await self.repo.update_media_status(media_id, "failed")
             await self.db.commit()
