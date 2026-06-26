@@ -17,6 +17,7 @@ from database.session import SessionLocal
 from modules.peoplefind.model import FaceSearchSession, MediaSource, FaceSearchResult
 from modules.peoplefind.repository import PeopleFindRepository
 from services.ai.face_recognition import face_rec_service
+from shared.utils.video_format import videoFormatChanger
 
 VIDEO_MATCHES_DIR = os.path.join("storage", "video_matches")
 os.makedirs(VIDEO_MATCHES_DIR, exist_ok=True)
@@ -523,6 +524,12 @@ def index_peoplecount_task(
                 
                 cap.release()
                 writer.release()
+                
+                # Transcode output video to browser-compatible H.264 format using shared video utility
+                try:
+                    videoFormatChanger(processed_filepath, formats="h264", overwrite_input=True)
+                except Exception as e:
+                    logger.error(f"Video transcoding failed (falling back to raw mp4v): {e}")
                 
                 # Apply noise filter
                 filtered_tracks = {tid: info for tid, info in tracks_history.items() if info["total_frames"] >= min_track_frames}
@@ -1196,6 +1203,12 @@ def index_objectcount_task(
                     
                 cap.release()
                 writer.release()
+                
+                # Transcode output video to browser-compatible H.264 format using shared video utility
+                try:
+                    videoFormatChanger(processed_filepath, formats="h264", overwrite_input=True)
+                except Exception as e:
+                    logger.error(f"Video transcoding failed (falling back to raw mp4v): {e}")
                 
                 # Apply noise filter to get final results
                 filtered_tracks = {tid: info for tid, info in tracks_history.items() if info["total_frames"] >= min_track_frames}
