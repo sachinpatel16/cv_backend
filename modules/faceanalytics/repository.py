@@ -9,7 +9,8 @@ from modules.peopleanalytics.model import (
     PeopleAnalyticsSession,
     PersonOccurrence,
     LineCrossingLog,
-    EmployeeAttendanceLog
+    EmployeeAttendanceLog,
+    PersonIdentity
 )
 
 class FaceAnalyticsRepository(PeopleAnalyticsRepository):

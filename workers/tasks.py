@@ -342,8 +342,26 @@ def index_peoplecount_task(
             STrack.reset_id_counter()
 
             if media_type == "photo":
-                # Process photo
-                frame = cv2.imread(filepath)
+                # Decode image using Pillow for maximum compatibility (HEIC, PNG, JPEG, WEBP, etc.)
+                from PIL import Image
+                import io
+                import pillow_heif
+                
+                frame = None
+                try:
+                    pillow_heif.register_heif_opener()
+                    with open(filepath, "rb") as f:
+                        content = f.read()
+                    image = Image.open(io.BytesIO(content))
+                    if image.mode != "RGB":
+                        image = image.convert("RGB")
+                    img_rgb = np.array(image)
+                    # Convert RGB to BGR for OpenCV
+                    frame = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                except Exception as e:
+                    logger.error(f"Pillow image decoding failed: {e}. Falling back to OpenCV.")
+                    frame = cv2.imread(filepath)
+                
                 if frame is None:
                     await repo.update_media_status(media_id, "failed")
                     await db.commit()
@@ -352,6 +370,8 @@ def index_peoplecount_task(
                 # YOLO detection (filter classes)
                 results = model(frame, conf=confidence_threshold, iou=0.5, device=device, verbose=False)
                 person_count = 0
+                annotated_frame = frame.copy()
+                
                 if results:
                     result = results[0]
                     boxes = result.boxes
@@ -360,6 +380,16 @@ def index_peoplecount_task(
                         class_name = model.names.get(cls_id, "unknown")
                         if class_name == "person":
                             person_count += 1
+                            x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy().tolist())
+                            # Draw bounding box and label
+                            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(annotated_frame, f"Person {person_count}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Save annotated frame to disk
+                out_filename = f"processed_{media_id}.jpg"
+                processed_filepath = os.path.join("storage", "peoplecount_outputs", out_filename)
+                os.makedirs(os.path.dirname(processed_filepath), exist_ok=True)
+                cv2.imwrite(processed_filepath, annotated_frame)
                 
                 # Update DB
                 await repo.update_media_results(
@@ -369,7 +399,7 @@ def index_peoplecount_task(
                     peak_people_count=person_count,
                     average_people_count=float(person_count),
                     video_duration_seconds=0.0,
-                    processed_filepath=None
+                    processed_filepath=processed_filepath
                 )
                 await db.commit()
                 
@@ -607,8 +637,26 @@ def index_objectcount_task(
             imgsz = configs.get("imgsz", 480)
 
             if media_type == "photo":
-                # Process photo
-                frame = cv2.imread(filepath)
+                # Decode image using Pillow for maximum compatibility (HEIC, PNG, JPEG, WEBP, etc.)
+                from PIL import Image
+                import io
+                import pillow_heif
+                
+                frame = None
+                try:
+                    pillow_heif.register_heif_opener()
+                    with open(filepath, "rb") as f:
+                        content = f.read()
+                    image = Image.open(io.BytesIO(content))
+                    if image.mode != "RGB":
+                        image = image.convert("RGB")
+                    img_rgb = np.array(image)
+                    # Convert RGB to BGR for OpenCV
+                    frame = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                except Exception as e:
+                    logger.error(f"Pillow image decoding failed: {e}. Falling back to OpenCV.")
+                    frame = cv2.imread(filepath)
+                
                 if frame is None:
                     await repo.update_media_status(media_id, "failed")
                     await db.commit()
@@ -621,6 +669,24 @@ def index_objectcount_task(
                 total_detected = 0
                 
                 vehicle_classes = {"car", "bus", "truck", "motorcycle", "bicycle"}
+                
+                gender_counts = {
+                    "male": 0,
+                    "female": 0,
+                    "unknown": 0
+                }
+                
+                CLASS_COLORS = {
+                    "person": (0, 255, 0),       # Green
+                    "vehicle": (255, 0, 0),      # Blue
+                    "car": (255, 0, 0),          # Blue
+                    "bus": (255, 255, 0),        # Cyan
+                    "truck": (255, 0, 255),      # Magenta
+                    "motorcycle": (0, 165, 255), # Orange
+                    "bicycle": (0, 255, 255),    # Yellow
+                }
+                
+                annotated_frame = frame.copy()
                 
                 if results:
                     result = results[0]
@@ -638,16 +704,78 @@ def index_objectcount_task(
                         detected_counts[class_name] = detected_counts.get(class_name, 0) + 1
                         total_detected += 1
                         
+                        # Bounding box coordinates
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy().tolist())
+                        
+                        # Gender classification for "person" class if enabled
+                        resolved_gender = None
+                        if class_name == "person" and classify_gender:
+                            h, w, _ = frame.shape
+                            rx1 = max(0, min(x1, w - 1))
+                            ry1 = max(0, min(y1, h - 1))
+                            rx2 = max(0, min(x2, w - 1))
+                            ry2 = max(0, min(y2, h - 1))
+                            
+                            box_h = ry2 - ry1
+                            if (rx2 - rx1) > 0 and box_h > 0:
+                                # Approximate the head region (top 25% of the body box)
+                                head_ry2 = ry1 + int(box_h * 0.25)
+                                head_ry2 = max(ry1 + 1, min(head_ry2, ry2))
+                                head_crop = frame[ry1:head_ry2, rx1:rx2]
+                                
+                                # Use high-quality face detector to find and align faces in the head region
+                                try:
+                                    _, encoded_head = cv2.imencode(".jpg", head_crop)
+                                    head_bytes = encoded_head.tobytes()
+                                    detected_faces = face_rec_service.extract_faces(head_bytes)
+                                    
+                                    if detected_faces:
+                                        valid_faces = []
+                                        for face in detected_faces:
+                                            fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                                            # Relaxed size and confidence filters for small/distant faces in group photos
+                                            if (fx2 - fx1) >= 15 and (fy2 - fy1) >= 15 and face.get("det_score", 0.0) >= 0.40:
+                                                valid_faces.append(face)
+                                                
+                                        if valid_faces:
+                                            largest_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+                                            gender_val = largest_face.get("gender")
+                                            if gender_val is not None:
+                                                resolved_gender = "Male" if gender_val == 1 else "Female"
+                                except Exception as g_err:
+                                    logger.error(f"Face-based gender prediction failed on photo: {g_err}")
+                            
+                            if not resolved_gender:
+                                resolved_gender = "unknown"
+                                
+                            if resolved_gender == "Male":
+                                gender_counts["male"] += 1
+                            elif resolved_gender == "Female":
+                                gender_counts["female"] += 1
+                            else:
+                                gender_counts["unknown"] += 1
+                        
+                        # Draw bounding box and label on annotated frame
+                        color = CLASS_COLORS.get(class_name, (0, 255, 0))
+                        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+                        
+                        label = class_name
+                        if resolved_gender:
+                            label += f" ({resolved_gender})"
+                        cv2.putText(annotated_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # Save annotated frame to disk
+                out_filename = f"processed_{media_id}.jpg"
+                processed_filepath = os.path.join("storage", "objectcount_outputs", out_filename)
+                os.makedirs(os.path.dirname(processed_filepath), exist_ok=True)
+                cv2.imwrite(processed_filepath, annotated_frame)
+                
                 report_summary = {
                     "total_unique_objects": total_detected,
                     "peak_objects_count": total_detected,
                     "average_objects_count": float(total_detected),
                     "unique_counts": detected_counts,
-                    "gender_breakdown": {
-                        "male": 0,
-                        "female": 0,
-                        "unknown": 0
-                    }
+                    "gender_breakdown": gender_counts
                 }
                 
                 # Update DB
@@ -658,7 +786,7 @@ def index_objectcount_task(
                     peak_objects_count=total_detected,
                     average_objects_count=float(total_detected),
                     video_duration_seconds=0.0,
-                    processed_filepath=None,
+                    processed_filepath=processed_filepath,
                     classify_gender=classify_gender,
                     classify_vehicle=classify_vehicle,
                     classes_to_track=classes_to_track,
