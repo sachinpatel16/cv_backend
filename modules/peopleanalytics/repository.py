@@ -155,29 +155,34 @@ class PeopleAnalyticsRepository:
         return (row[0], float(row[1])) if row else None
 
     async def find_similar_visitor(
-        self, tenant_id: uuid.UUID, target_embedding: list[float], threshold: float
+        self, tenant_id: uuid.UUID, target_embedding: list[float], threshold: float, class_id: Optional[int] = 0
     ) -> Optional[Tuple[PersonIdentity, float]]:
         """
-        Searches the generic visitor identities for matching visual features.
+        Searches the generic visitor identities for matching visual features, optionally filtered by class_id.
         """
         distance_limit = 1.0 - threshold
         similarity_expr = (1.0 - PersonEmbedding.embedding.cosine_distance(target_embedding)).label("similarity")
 
+        conditions = [
+            PersonIdentity.tenant_id == tenant_id,
+            PersonIdentity.is_delete == False,
+            PersonEmbedding.is_delete == False,
+            PersonEmbedding.embedding.cosine_distance(target_embedding) <= distance_limit
+        ]
+        if class_id is not None:
+            conditions.append(PersonIdentity.class_id == class_id)
+
         stmt = (
             select(PersonIdentity, similarity_expr)
             .join(PersonEmbedding, PersonEmbedding.identity_id == PersonIdentity.id)
-            .where(
-                PersonIdentity.tenant_id == tenant_id,
-                PersonIdentity.is_delete == False,
-                PersonEmbedding.is_delete == False,
-                PersonEmbedding.embedding.cosine_distance(target_embedding) <= distance_limit
-            )
+            .where(and_(*conditions))
             .order_by(PersonEmbedding.embedding.cosine_distance(target_embedding))
             .limit(1)
         )
         result = await self.db.execute(stmt)
         row = result.first()
         return (row[0], float(row[1])) if row else None
+
 
     # ==========================================
     # SESSION OPERATIONS

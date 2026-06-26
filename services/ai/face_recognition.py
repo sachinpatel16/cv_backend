@@ -76,7 +76,11 @@ class FaceRecognitionService:
             results.append({
                 "face_idx": i,
                 "bbox": [int(x) for x in face.bbox],
-                "embedding": face.embedding.tolist()
+                "embedding": face.embedding.tolist(),
+                "det_score": float(face.det_score) if hasattr(face, "det_score") else 0.0,
+                "kps": face.kps.tolist() if getattr(face, "kps", None) is not None else None,
+                "gender": int(face.gender) if getattr(face, "gender", None) is not None else None,
+                "age": int(face.age) if getattr(face, "age", None) is not None else None
             })
             
         return results
