@@ -15,6 +15,7 @@ from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
 from modules.employees.model import Employee
 from modules.faceanalytics.repository import FaceAnalyticsRepository
 from modules.peoplecount.tracker import KalmanFilter
+from shared.utils.video_format import videoFormatChanger
 cv2.setNumThreads(0)
 FACE_OUTPUTS_DIR = os.path.join("storage", "face_analytics_outputs")
 os.makedirs(FACE_OUTPUTS_DIR, exist_ok=True)
@@ -465,6 +466,12 @@ def process_face_analytics_task(
 
                 cap.release()
                 output_writer.release()
+
+                # Transcode output video to browser-compatible H.264 format using shared video utility
+                try:
+                    videoFormatChanger(output_path, formats="h264", overwrite_input=True)
+                except Exception as e:
+                    print(f"Video transcoding failed (falling back to raw mp4v): {e}")
 
                 # Process final logs and occurrence records
                 from datetime import datetime, timezone

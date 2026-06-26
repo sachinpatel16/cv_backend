@@ -21,6 +21,8 @@ from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
 from modules.employees.model import Employee
 from modules.peopleanalytics.repository import PeopleAnalyticsRepository
 from services.ai.people_analytics import ReIDFeatureExtractor, LineCrossingCounter
+from shared.utils.video_format import videoFormatChanger
+
 
 ANALYTICS_OUTPUTS_DIR = os.path.join("storage", "people_analytics_outputs")
 os.makedirs(ANALYTICS_OUTPUTS_DIR, exist_ok=True)
@@ -398,24 +400,11 @@ async def _process_video_job(
     cap.release()
     output_writer.release()
 
-    # Transcode output video to browser-compatible H.264 format using FFmpeg
-    import subprocess
-    h264_output_path = output_path.replace(".mp4", "_h264.mp4")
+    # Transcode output video to browser-compatible H.264 format using shared video utility
     try:
-        cmd = [
-            "ffmpeg",
-            "-i", output_path,
-            "-vcodec", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-acodec", "aac",
-            "-y",
-            h264_output_path
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(h264_output_path):
-            os.replace(h264_output_path, output_path)
+        videoFormatChanger(output_path, formats="h264", overwrite_input=True)
     except Exception as e:
-        print(f"FFmpeg transcoding failed (falling back to raw mp4v): {e}")
+        print(f"Video transcoding failed (falling back to raw mp4v): {e}")
 
     # Filter out very short, spurious tracks (e.g. tracks that lasted less than 10 frames)
     # BUT keep those that crossed the line so we can resolve their identity for crossing logs
