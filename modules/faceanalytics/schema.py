@@ -3,6 +3,21 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 
+class FirstTimeVisitorDetail(BaseModel):
+    identity_id: UUID
+    photo_path: Optional[str] = None
+    first_seen: float
+    last_seen: float
+
+    @computed_field
+    @property
+    def dwell_time(self) -> float:
+        return round(self.last_seen - self.first_seen, 2)
+
+    class Config:
+        from_attributes = True
+
+
 class FaceAnalyticsSessionResponse(BaseModel):
     id: UUID
     tenant_id: UUID
@@ -11,18 +26,15 @@ class FaceAnalyticsSessionResponse(BaseModel):
     output_video_path: Optional[str] = None
     status: str
     
-    line_start: Optional[List[int]] = None
-    line_end: Optional[List[int]] = None
     similarity_threshold: float
     confidence_threshold: float
     
     unique_person_count: Optional[int] = None
     total_person_count: Optional[int] = None
     first_time_visitor_count: Optional[int] = None
+    first_time_visitors: Optional[List[FirstTimeVisitorDetail]] = None
     peak_occupancy: Optional[int] = None
     average_occupancy: Optional[float] = None
-    entry_count: Optional[int] = None
-    exit_count: Optional[int] = None
     
     occupancy_timeline: Optional[List[dict]] = None
     
@@ -53,16 +65,12 @@ class UploadedVideoResponse(BaseModel):
 
 class VideoProcessItem(BaseModel):
     video_path: str = Field(..., description="Unique saved video path")
-    line_start: Optional[List[int]] = Field(None, description="Coordinates [x, y] of counting line start")
-    line_end: Optional[List[int]] = Field(None, description="Coordinates [x, y] of counting line end")
     similarity_threshold: Optional[float] = Field(None, ge=0.5, le=1.0, description="Optional per-video similarity threshold")
     confidence_threshold: Optional[float] = Field(None, ge=0.1, le=1.0, description="Optional per-video confidence threshold")
 
 
 class ProcessVideosRequest(BaseModel):
     videos: List[VideoProcessItem] = Field(..., description="List of videos with their configurations")
-    line_start: Optional[List[int]] = Field(None, description="Global fallback coordinates [x, y] of counting line start")
-    line_end: Optional[List[int]] = Field(None, description="Global fallback coordinates [x, y] of counting line end")
     similarity_threshold: float = Field(0.70, ge=0.3, le=1.0, description="Global fallback ReID cosine similarity threshold")
     confidence_threshold: float = Field(0.3, ge=0.1, le=1.0, description="Global fallback face detection confidence threshold")
 

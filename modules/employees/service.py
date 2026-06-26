@@ -184,8 +184,25 @@ class EmployeeService:
         with open(filepath, "wb") as f:
             f.write(content)
 
-        nparr = np.frombuffer(content, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        # Decode image using Pillow for maximum compatibility (HEIC, PNG, JPEG, WEBP, etc.)
+        from PIL import Image
+        import io
+        import pillow_heif
+        
+        img = None
+        try:
+            pillow_heif.register_heif_opener()
+            image = Image.open(io.BytesIO(content))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            img_rgb = np.array(image)
+            # Convert RGB to BGR for OpenCV
+            img = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            # Fallback to OpenCV if Pillow decoding fails
+            nparr = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
         if img is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

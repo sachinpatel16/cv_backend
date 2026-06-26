@@ -122,8 +122,6 @@ async def process_batch_sessions(
     sessions = await service.create_and_start_sessions(
         tenant_id=tenant_id,
         videos=request.videos,
-        global_line_start=request.line_start,
-        global_line_end=request.line_end,
         global_similarity_threshold=request.similarity_threshold,
         global_confidence_threshold=request.confidence_threshold,
         user_id=current_user.id

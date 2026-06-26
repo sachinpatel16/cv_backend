@@ -43,7 +43,7 @@ class InsightFaceGenderClassifier:
             logger.error(f"Error loading InsightFace ONNX session: {e}")
             raise e
             
-        self.gender_classes = ["Male", "Female"]
+        self.gender_classes = ["Female", "Male"]
 
     def predict(self, face_image):
         """
@@ -63,9 +63,8 @@ class InsightFaceGenderClassifier:
                 return {"gender": "Male", "confidence": 0.5}
                 
             aimg = cv2.resize(face_image, (96, 96))
-            rgb = cv2.cvtColor(aimg, cv2.COLOR_BGR2RGB)
-            
-            normalized = (rgb.astype(np.float32) - self.input_mean) / self.input_std
+            # InsightFace ONNX models are trained on BGR images; do not convert to RGB
+            normalized = (aimg.astype(np.float32) - self.input_mean) / self.input_std
             blob = np.transpose(normalized, (2, 0, 1))
             blob = np.expand_dims(blob, axis=0) # Add batch dim (1, 3, 96, 96)
             
