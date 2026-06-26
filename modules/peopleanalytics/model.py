@@ -47,6 +47,8 @@ class PeopleAnalyticsSession(BaseModel):
     average_occupancy: Mapped[float | None] = mapped_column(Float, nullable=True)
     entry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     exit_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    employee_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visitor_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
     # Store occupancy history over video timeline (e.g. [{"time_sec": 10.5, "occupancy": 3}, ...])
     occupancy_timeline: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
