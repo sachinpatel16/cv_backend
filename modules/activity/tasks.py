@@ -16,7 +16,7 @@ os.makedirs(ALERT_SNAPSHOTS_DIR, exist_ok=True)
 
 
 @celery_app.task(name="modules.activity.tasks.process_activity_media_task")
-def process_activity_media_task(media_id_str: str, interval: float = 1.0):
+def process_activity_media_task(media_id_str: str, interval: float = 0.033):
     """
     Celery task to run activity and theft detection on an uploaded media file in the background.
     """

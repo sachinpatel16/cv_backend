@@ -9,7 +9,8 @@ from modules.peopleanalytics.model import (
     PeopleAnalyticsSession,
     PersonOccurrence,
     LineCrossingLog,
-    EmployeeAttendanceLog
+    EmployeeAttendanceLog,
+    PersonIdentity
 )
 
 class FaceAnalyticsRepository(PeopleAnalyticsRepository):
@@ -81,3 +82,56 @@ class FaceAnalyticsRepository(PeopleAnalyticsRepository):
             await self.db.flush()
             return session.video_path, session.output_video_path, crop_paths
         return None
+
+    async def get_session_first_time_visitors(self, session_id: uuid.UUID) -> List[PersonOccurrence]:
+        """
+        Retrieves all PersonOccurrence records in the given session for identities 
+        whose very first appearance across all sessions is in this session.
+        """
+        # 1. Get all occurrences in this session
+        stmt = select(PersonOccurrence).where(
+            PersonOccurrence.session_id == session_id,
+            PersonOccurrence.is_delete == False
+        )
+        res = await self.db.execute(stmt)
+        occurrences = list(res.scalars().all())
+        
+        if not occurrences:
+            return []
+            
+        # 2. Extract unique identity IDs
+        identity_ids = list(set(occ.identity_id for occ in occurrences))
+        
+        # 3. Get the current session's creation time to compare
+        curr_session_stmt = select(PeopleAnalyticsSession).where(PeopleAnalyticsSession.id == session_id)
+        curr_session_res = await self.db.execute(curr_session_stmt)
+        curr_session = curr_session_res.scalars().first()
+        if not curr_session:
+            return []
+            
+        # 4. Find which of these identities appeared in any session created BEFORE this session
+        stmt_older = (
+            select(PersonOccurrence.identity_id)
+            .join(PeopleAnalyticsSession, PersonOccurrence.session_id == PeopleAnalyticsSession.id)
+            .where(
+                PersonOccurrence.identity_id.in_(identity_ids),
+                PeopleAnalyticsSession.created_at < curr_session.created_at,
+                PersonOccurrence.is_delete == False,
+                PeopleAnalyticsSession.is_delete == False
+            )
+        )
+        res_older = await self.db.execute(stmt_older)
+        older_identity_ids = set(res_older.scalars().all())
+        
+        # 5. Filter occurrences to only those whose identity has no older appearances
+        first_time_occs = [occ for occ in occurrences if occ.identity_id not in older_identity_ids]
+        return first_time_occs
+
+    async def find_similar_visitor(
+        self, tenant_id: uuid.UUID, target_embedding: list[float], threshold: float, class_id: Optional[int] = 1
+    ) -> Optional[Tuple[PersonIdentity, float]]:
+        """
+        Overridden to automatically search face-only visitor identities (class_id=1) by default.
+        """
+        return await super().find_similar_visitor(tenant_id, target_embedding, threshold, class_id=class_id)
+

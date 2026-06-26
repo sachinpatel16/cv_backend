@@ -121,8 +121,8 @@ async def _process_image_job(
         if embedding is None:
             continue
 
-        # Search visitors
-        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+        # Search visitors (specifically class_id=0 for body ReID)
+        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
         if match_vis:
             visitor, sim = match_vis
             crop_path = None
@@ -198,7 +198,7 @@ async def _process_image_job(
     cv2.imwrite(output_path, img)
 
     # Generate flat occupancy timeline for static image (just 1 frame)
-    occupancy_timeline = [{"time_sec": 0.0, "occupancy": total_person_count}]
+    occupancy_timeline = [{"time_sec": 0, "occupancy": total_person_count}]
 
     # Update DB Session results
     await repo.update_session_results(
@@ -305,6 +305,7 @@ async def _process_video_job(
                         "best_crop": crop if crop is not None and crop.size > 0 else None,
                         "best_crop_area": (x2 - x1) * (y2 - y1) if crop is not None and crop.size > 0 else 0,
                         "matched": False,
+                        "last_match_area": 0,
                         "frames_since_start": 1
                     }
                 else:
@@ -327,8 +328,8 @@ async def _process_video_job(
                     if best_crop is not None:
                         embedding = extractor.get_embedding(best_crop)
                         if embedding is not None:
-                            # Match against generic visitors
-                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
+                            # Match against generic visitors (specifically class_id=0 for body ReID)
+                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
                             if match_vis:
                                 visitor, sim = match_vis
                                 track_info.update({
@@ -529,6 +530,19 @@ async def _process_video_job(
     average_occupancy = np.mean(occupancies) if occupancies else 0.0
     total_person_count = len(completed_occurrences) + len(completed_attendance)
 
+    # Downsample occupancy_timeline to 1-second intervals
+    downsampled_timeline = []
+    if occupancy_history:
+        from collections import defaultdict
+        by_second = defaultdict(list)
+        for o in occupancy_history:
+            sec_int = int(o["time_sec"])
+            by_second[sec_int].append(o["occupancy"])
+            
+        for sec in sorted(by_second.keys()):
+            avg_occ = int(round(np.mean(by_second[sec])))
+            downsampled_timeline.append({"time_sec": sec, "occupancy": avg_occ})
+
     await repo.update_session_results(
         session_id=session.id,
         unique_person_count=len(unique_seen_identities),
@@ -538,7 +552,7 @@ async def _process_video_job(
         average_occupancy=round(float(average_occupancy), 2),
         entry_count=entry_count,
         exit_count=exit_count,
-        occupancy_timeline=occupancy_history,
+        occupancy_timeline=downsampled_timeline,
         output_video_path=output_path
     )
     await db.commit()

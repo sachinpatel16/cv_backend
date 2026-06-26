@@ -1,7 +1,7 @@
 import os
 import uuid
 import cv2
-cv2.setNumThreads(0)
+
 
 import numpy as np
 from sqlalchemy import select
@@ -14,7 +14,8 @@ from workers.utils import run_async
 from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
 from modules.employees.model import Employee
 from modules.faceanalytics.repository import FaceAnalyticsRepository
-
+from modules.peoplecount.tracker import KalmanFilter
+cv2.setNumThreads(0)
 FACE_OUTPUTS_DIR = os.path.join("storage", "face_analytics_outputs")
 os.makedirs(FACE_OUTPUTS_DIR, exist_ok=True)
 
@@ -22,12 +23,80 @@ VISITOR_CROPS_DIR = os.path.join("storage", "visitor_crops")
 os.makedirs(VISITOR_CROPS_DIR, exist_ok=True)
 
 
+def is_face_occluded(frame, kps, threshold=15.0):
+    """
+    Checks if the nose or mouth keypoints are occluded by comparing their chrominance (Cr, Cb)
+    to the reference skin tone of the forehead (midpoint between the eyes, shifted slightly up).
+    Returns True if an occlusion (non-skin object covering the features) is detected.
+    """
+    if not kps or len(kps) < 5:
+        return False
+        
+    h, w = frame.shape[:2]
+    
+    def get_patch_chroma(cx, cy, patch_size=5):
+        half = patch_size // 2
+        x1 = max(0, int(cx - half))
+        x2 = min(w - 1, int(cx + half))
+        y1 = max(0, int(cy - half))
+        y2 = min(h - 1, int(cy + half))
+        
+        patch_bgr = frame[y1:y2+1, x1:x2+1]
+        if patch_bgr.size == 0:
+            return None
+            
+        patch_ycrcb = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2YCrCb)
+        mean_ycrcb = cv2.mean(patch_ycrcb)
+        return mean_ycrcb[1], mean_ycrcb[2] # Cr, Cb
+
+    # Keypoint indices: 0/1: Eyes, 2: Nose, 3/4: Mouth corners
+    le_x, le_y = kps[0]
+    re_x, re_y = kps[1]
+    
+    # Forehead reference point: shifted up from eye midpoint by 25% of inter-pupillary distance
+    eye_dist = np.sqrt((re_x - le_x)**2 + (re_y - le_y)**2)
+    fh_x = (le_x + re_x) / 2.0
+    fh_y = (le_y + re_y) / 2.0 - (eye_dist * 0.25)
+    
+    fh_y = max(0, min(h - 1, fh_y))
+    fh_x = max(0, min(w - 1, fh_x))
+    
+    fh_chroma = get_patch_chroma(fh_x, fh_y)
+    if not fh_chroma:
+        return False
+    fh_cr, fh_cb = fh_chroma
+    
+    # Fallback to standard skin tone if forehead is not skin-colored (e.g., hat/hair/extreme light)
+    if not (133 <= fh_cr <= 173 and 77 <= fh_cb <= 127):
+        fh_cr, fh_cb = 153.0, 102.0
+        
+    # Check nose tip (2) and mouth corners (3, 4)
+    for idx in [2, 3, 4]:
+        tx, ty = kps[idx]
+        t_chroma = get_patch_chroma(tx, ty)
+        if not t_chroma:
+            continue
+        t_cr, t_cb = t_chroma
+        
+        # If Cr or Cb difference exceeds the threshold, check if it's still within universal skin bounds
+        if abs(fh_cr - t_cr) > threshold or abs(fh_cb - t_cb) > threshold:
+            # Safety Net: If the patch is still within the broad, universal human skin bounds,
+            # we accept it to prevent false rejections due to skin conditions, burns, or redness.
+            is_universal_skin = (133 <= t_cr <= 173) and (77 <= t_cb <= 127)
+            if not is_universal_skin:
+                return True
+            
+    return False
+
+
 class FaceTracker:
-    def __init__(self, max_lost_frames=30, iou_threshold=0.3):
+    def __init__(self, max_lost_frames=30, iou_threshold=0.3, max_spatial_lost_frames=90):
         self.max_lost_frames = max_lost_frames
         self.iou_threshold = iou_threshold
         self.next_id = 1
         self.tracks = {}  # face_id -> track_dict
+        self.kf = KalmanFilter()
+        self.max_spatial_lost_frames = max_spatial_lost_frames
 
     def update(self, detected_faces, frame_idx, timestamp_sec):
         """
@@ -36,23 +105,56 @@ class FaceTracker:
         updated_tracks = {}
         matched_detections = set()
 
-        # 1. Associate detected faces with active tracks based on IoU
+        # Predict Kalman states for all active/existing tracks
         for face_id, track in list(self.tracks.items()):
-            best_iou = 0
-            best_det_idx = -1
-            for det_idx, det in enumerate(detected_faces):
-                if det_idx in matched_detections:
-                    continue
-                iou = self._calculate_iou(track["bbox"], det["bbox"])
-                if iou > best_iou:
-                    best_iou = iou
-                    best_det_idx = det_idx
+            track["mean"], track["covariance"] = self.kf.predict(track["mean"], track["covariance"])
+            # Convert predicted state tlwh back to [x1, y1, x2, y2]
+            p_tlwh = track["mean"][:4]
+            track["predicted_bbox"] = [
+                p_tlwh[0],
+                p_tlwh[1],
+                p_tlwh[0] + p_tlwh[2],
+                p_tlwh[1] + p_tlwh[3]
+            ]
 
-            if best_iou >= self.iou_threshold:
+        # 1. Associate detected faces with active tracks based on IoU with predicted bbox
+        for face_id, track in list(self.tracks.items()):
+            best_det_idx = -1
+            
+            # Skip spatial matching if the track has been lost for too long, to prevent ID swapping
+            if frame_idx - track["last_seen_frame"] <= self.max_spatial_lost_frames:
+                for det_idx, det in enumerate(detected_faces):
+                    if det_idx in matched_detections:
+                        continue
+                    iou = self._calculate_iou(track["predicted_bbox"], det["bbox"])
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_det_idx = det_idx
+
+            if best_det_idx != -1:
                 det = detected_faces[best_det_idx]
                 matched_detections.add(best_det_idx)
                 
-                track["bbox"] = det["bbox"]
+                # Convert new detection bbox to tlwh for Kalman update
+                det_tlwh = [
+                    det["bbox"][0],
+                    det["bbox"][1],
+                    det["bbox"][2] - det["bbox"][0],
+                    det["bbox"][3] - det["bbox"][1]
+                ]
+                # Update Kalman filter state
+                track["mean"], track["covariance"] = self.kf.update(
+                    track["mean"], track["covariance"], det_tlwh
+                )
+                # Compute updated bbox from state
+                u_tlwh = track["mean"][:4]
+                track["bbox"] = [
+                    u_tlwh[0],
+                    u_tlwh[1],
+                    u_tlwh[0] + u_tlwh[2],
+                    u_tlwh[1] + u_tlwh[3]
+                ]
+                
                 track["last_seen_frame"] = frame_idx
                 track["last_seen_time"] = timestamp_sec
                 track["occurrences"] += 1
@@ -69,6 +171,8 @@ class FaceTracker:
                 # Keep lost tracks if they haven't expired
                 if frame_idx - track["last_seen_frame"] <= self.max_lost_frames:
                     track["active_in_current_frame"] = False
+                    # Update bbox to predicted_bbox so it drifts smoothly while lost
+                    track["bbox"] = track["predicted_bbox"]
                     updated_tracks[face_id] = track
 
         # 2. Start new tracks for unmatched detections
@@ -76,10 +180,21 @@ class FaceTracker:
             if det_idx in matched_detections:
                 continue
             
+            # Initialize Kalman Filter state for the new track
+            det_tlwh = [
+                det["bbox"][0],
+                det["bbox"][1],
+                det["bbox"][2] - det["bbox"][0],
+                det["bbox"][3] - det["bbox"][1]
+            ]
+            mean, covariance = self.kf.initiate(det_tlwh)
+            
             area = (det["bbox"][2] - det["bbox"][0]) * (det["bbox"][3] - det["bbox"][1])
             new_track = {
                 "face_id": self.next_id,
                 "bbox": det["bbox"],
+                "mean": mean,
+                "covariance": covariance,
                 "first_seen_time": timestamp_sec,
                 "last_seen_time": timestamp_sec,
                 "first_seen_frame": frame_idx,
@@ -89,6 +204,7 @@ class FaceTracker:
                 "embedding": det.get("embedding"),
                 "best_crop": det.get("crop"),
                 "matched": False,
+                "last_match_area": 0,
                 "matched_type": None,  # "employee" or "visitor"
                 "matched_id": None,    # employee_id or visitor_id
                 "label": f"Face #{self.next_id}",
@@ -165,7 +281,7 @@ def process_face_analytics_task(
                 output_writer = cv2.VideoWriter(output_path, fourcc, fps, (orig_width, orig_height))
 
                 # Initialize custom tracker
-                tracker = FaceTracker(max_lost_frames=int(fps * 3))  # 3 seconds lost threshold
+                tracker = FaceTracker(max_lost_frames=999999, max_spatial_lost_frames=int(fps * 3))  # Keep lost tracks in memory, but limit spatial matching to 3s
                 
                 # Tracking states
                 active_tracks = {}
@@ -199,6 +315,36 @@ def process_face_analytics_task(
                         detected_faces = []
                         for face in faces:
                             fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                            
+                            # 1. Size filter
+                            if (fx2 - fx1) < 45 or (fy2 - fy1) < 45:
+                                continue
+
+                            # 2. Confidence filter
+                            if face.get("det_score", 0.0) < 0.70:
+                                continue
+
+                            # 3. Keypoints containment filter (ensures full face is in the box)
+                            kps = face.get("kps")
+                            is_full_face = True
+                            if kps:
+                                margin_x = int((fx2 - fx1) * 0.05)
+                                margin_y = int((fy2 - fy1) * 0.05)
+                                limit_x1 = fx1 - margin_x
+                                limit_x2 = fx2 + margin_x
+                                limit_y1 = fy1 - margin_y
+                                limit_y2 = fy2 + margin_y
+                                
+                                for kp in kps:
+                                    kp_x, kp_y = kp
+                                    if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
+                                        is_full_face = False
+                                        break
+
+                            if not is_full_face:
+                                continue
+
+
                             fx1, fy1 = max(0, fx1), max(0, fy1)
                             fx2, fy2 = min(orig_width, fx2), min(orig_height, fy2)
                             crop = frame[fy1:fy2, fx1:fx2]
@@ -210,6 +356,19 @@ def process_face_analytics_task(
 
                         # Update tracker
                         active_tracks = tracker.update(detected_faces, frame_idx, timestamp_sec)
+                    else:
+                        # On intermediate frames, smoothly predict and advance bounding boxes of active tracks using Kalman Filter
+                        for face_id, track in list(tracker.tracks.items()):
+                            if track["active_in_current_frame"]:
+                                track["mean"], track["covariance"] = tracker.kf.predict(track["mean"], track["covariance"])
+                                p_tlwh = track["mean"][:4]
+                                track["bbox"] = [
+                                    p_tlwh[0],
+                                    p_tlwh[1],
+                                    p_tlwh[0] + p_tlwh[2],
+                                    p_tlwh[1] + p_tlwh[3]
+                                ]
+                        active_tracks = tracker.tracks
 
                     # Compute current live occupancy (only count tracks active in current frame)
                     current_occupancy = sum(1 for t in active_tracks.values() if t["active_in_current_frame"])
@@ -223,41 +382,66 @@ def process_face_analytics_task(
                         if not track["active_in_current_frame"]:
                             continue
 
-                        # Resolve identity if embedding exists and not already matched
-                        if not track["matched"] and track["embedding"] is not None:
-                            from services.ai.math_utils import map_similarity_threshold, find_best_match_in_cache
+                        # Resolve identity if track has at least 5 occurrences, embedding exists, and not already matched
+                        if not track["matched"] and track["occurrences"] >= 5 and track["embedding"] is not None:
+                            from services.ai.math_utils import map_similarity_threshold
                             mapped_threshold = map_similarity_threshold(similarity_threshold)
-                            match_local = find_best_match_in_cache(track["embedding"], local_reid_cache, mapped_threshold)
-                            if match_local:
-                                local_id, sim = match_local
+                            match_vis = await repo.find_similar_visitor(
+                                session.tenant_id,
+                                track["embedding"].tolist(),
+                                mapped_threshold,
+                                class_id=1
+                            )
+                            if match_vis:
+                                visitor, sim = match_vis
                                 track["matched"] = True
                                 track["matched_type"] = "visitor"
-                                track["matched_id"] = local_id
-                                track["label"] = f"Person #{str(local_id)[:4]}"
-                            else:
-                                new_local_id = uuid.uuid4()
-                                local_reid_cache.append((new_local_id, track["embedding"]))
-                                track["matched"] = True
-                                track["matched_type"] = "visitor"
-                                track["matched_id"] = new_local_id
-                                track["label"] = f"Person #{str(new_local_id)[:4]}"
+                                track["matched_id"] = visitor.id
+                                track["label"] = f"Visitor #{str(visitor.id)[:4]}"
+                                
+                                # Update track color deterministically based on UUID BGR
+                                b = track["matched_id"].bytes
+                                r = b[0] % 200 + 55
+                                g = b[1] % 200 + 55
+                                bg = b[2] % 200 + 55
+                                track["color"] = (bg, g, r)
 
-                            # Update track color deterministically based on UUID BGR
-                            b = track["matched_id"].bytes
-                            r = b[0] % 200 + 55
-                            g = b[1] % 200 + 55
-                            bg = b[2] % 200 + 55
-                            track["color"] = (bg, g, r)
+                                await repo.create_person_embedding(
+                                    identity_id=visitor.id,
+                                    embedding=track["embedding"].tolist(),
+                                    bbox=track["bbox"],
+                                    timestamp=timestamp_sec
+                                )
+                            else:
+                                visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                                track["matched"] = True
+                                track["matched_type"] = "visitor"
+                                track["matched_id"] = visitor.id
+                                track["label"] = "New Visitor"
+                                track["color"] = (0, 0, 255) # Red for new visitors
+
+                                await repo.create_person_embedding(
+                                    identity_id=visitor.id,
+                                    embedding=track["embedding"].tolist(),
+                                    bbox=track["bbox"],
+                                    timestamp=timestamp_sec
+                                )
 
                         # Draw box and label
-                        tx1, ty1, tx2, ty2 = track["bbox"]
+                        tx1, ty1, tx2, ty2 = map(int, track["bbox"])
                         cv2.rectangle(frame, (tx1, ty1), (tx2, ty2), track["color"], 2)
                         cv2.putText(frame, track["label"], (tx1, ty1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, track["color"], 2)
 
                     # Calculate current unique count dynamically for HUD
                     # A unique person is any track that has accumulated at least 2 processed frames
                     MIN_TRACK_OCCURRENCES = 2
-                    valid_track_matched_ids = {t["matched_id"] for t in tracker.tracks.values() if t["occurrences"] >= MIN_TRACK_OCCURRENCES and t["matched_id"] is not None}
+                    valid_track_matched_ids = set()
+                    for face_id, t in tracker.tracks.items():
+                        if t["occurrences"] >= MIN_TRACK_OCCURRENCES:
+                            if t["matched_id"] is not None:
+                                valid_track_matched_ids.add(t["matched_id"])
+                            else:
+                                valid_track_matched_ids.add(f"temp_{face_id}")
                     current_unique_count = len(valid_track_matched_ids)
                     current_total_tracks = sum(1 for t in tracker.tracks.values() if t["occurrences"] >= MIN_TRACK_OCCURRENCES)
 
@@ -286,40 +470,77 @@ def process_face_analytics_task(
                 from datetime import datetime, timezone
                 now_ts = datetime.now(timezone.utc)
 
-                # Filter out very short, spurious tracks (e.g. tracks seen in less than 2 processed frames)
+                # 1. Filter out very short, spurious tracks (e.g. tracks seen in less than 2 processed frames)
                 MIN_TRACK_OCCURRENCES = 2
-                completed_occurrences = []
-                local_db_identities = {}
-
+                valid_tracks = {}
                 for face_id, track in list(tracker.tracks.items()):
-                    if track["occurrences"] < MIN_TRACK_OCCURRENCES:
-                        del tracker.tracks[face_id]
-                        continue
+                    if track["occurrences"] >= MIN_TRACK_OCCURRENCES:
+                        valid_tracks[face_id] = track
 
-                    # Retrieve or create a database PersonIdentity for this matched_id
-                    local_id = track["matched_id"]
-                    if local_id is None:
-                        local_id = uuid.uuid4()
-                        track["matched_id"] = local_id
+                # 2. Resolve database PersonIdentity IDs for all valid tracks
+                for face_id, track in valid_tracks.items():
+                    visitor_id = track["matched_id"]
+                    if visitor_id is None:
+                        if track["embedding"] is not None:
+                            from services.ai.math_utils import map_similarity_threshold
+                            mapped_threshold = map_similarity_threshold(similarity_threshold)
+                            match_vis = await repo.find_similar_visitor(
+                                session.tenant_id,
+                                track["embedding"].tolist(),
+                                mapped_threshold,
+                                class_id=1
+                            )
+                            if match_vis:
+                                visitor, sim = match_vis
+                                visitor_id = visitor.id
+                                track["matched_id"] = visitor_id
+                                track["label"] = f"Visitor #{str(visitor.id)[:4]}"
+                            else:
+                                visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                                visitor_id = visitor.id
+                                track["matched_id"] = visitor_id
+                                track["label"] = "New Visitor"
+                                await repo.create_person_embedding(
+                                    identity_id=visitor.id,
+                                    embedding=track["embedding"].tolist(),
+                                    bbox=track["bbox"],
+                                    timestamp=track["first_seen_time"]
+                                )
+                        else:
+                            visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                            visitor_id = visitor.id
+                            track["matched_id"] = visitor_id
+                            track["label"] = "New Visitor"
 
-                    if local_id not in local_db_identities:
-                        visitor = await repo.create_person_identity(session.tenant_id)
-                        local_db_identities[local_id] = visitor
-                    else:
-                        visitor = local_db_identities[local_id]
+                # 3. Group tracks by resolved visitor_id to save only the single best crop per unique visitor
+                from collections import defaultdict
+                tracks_by_visitor = defaultdict(list)
+                for face_id, track in valid_tracks.items():
+                    visitor_id = track["matched_id"]
+                    if visitor_id is not None:
+                        tracks_by_visitor[visitor_id].append(track)
 
-                    # Save crop if available
+                visitor_crop_paths = {}
+                for visitor_id, v_tracks in tracks_by_visitor.items():
+                    # Pick the track with the largest crop area
+                    best_track = max(v_tracks, key=lambda t: t.get("best_crop_area", 0))
                     crop_path = None
-                    if track["best_crop"] is not None:
+                    if best_track["best_crop"] is not None:
                         crop_filename = f"{uuid.uuid4()}.jpg"
                         user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
                         os.makedirs(user_crops_dir, exist_ok=True)
                         crop_path = os.path.join(user_crops_dir, crop_filename)
-                        cv2.imwrite(crop_path, track["best_crop"])
+                        cv2.imwrite(crop_path, best_track["best_crop"])
+                    visitor_crop_paths[visitor_id] = crop_path
 
+                # 4. Prepare and write completed occurrences
+                completed_occurrences = []
+                for face_id, track in valid_tracks.items():
+                    visitor_id = track["matched_id"]
+                    crop_path = visitor_crop_paths.get(visitor_id) if visitor_id else None
                     completed_occurrences.append({
                         "session_id": session.id,
-                        "identity_id": visitor.id,
+                        "identity_id": visitor_id,
                         "tracker_id": face_id,
                         "first_seen": track["first_seen_time"],
                         "last_seen": track["last_seen_time"],
@@ -337,24 +558,42 @@ def process_face_analytics_task(
                         crop_path=occ["crop_path"]
                     )
 
-                # Calculate stats (without employee matching, count unique people by local resolved identities)
-                total_unique_people = len(local_db_identities)
+                # Calculate stats (without employee matching, count unique people by database visitor IDs)
+                unique_visitors = {occ["identity_id"] for occ in completed_occurrences}
+                total_unique_people = len(unique_visitors)
                 total_detected = len(completed_occurrences)
+
+                # Calculate new visitor counts
+                new_visitor_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("label") == "New Visitor" and t["matched_id"] is not None}
+                first_time_visitor_count = len(new_visitor_ids)
 
                 total_occupancy_sum = sum(h["occupancy"] for h in occupancy_history)
                 avg_occupancy = round(total_occupancy_sum / len(occupancy_history), 2) if occupancy_history else 0.0
+
+                # Downsample occupancy_timeline to 1-second intervals
+                downsampled_timeline = []
+                if occupancy_history:
+                    from collections import defaultdict
+                    by_second = defaultdict(list)
+                    for o in occupancy_history:
+                        sec_int = int(o["time_sec"])
+                        by_second[sec_int].append(o["occupancy"])
+                        
+                    for sec in sorted(by_second.keys()):
+                        avg_occ = int(round(np.mean(by_second[sec])))
+                        downsampled_timeline.append({"time_sec": sec, "occupancy": avg_occ})
 
                 # Update database session results
                 await repo.update_session_results(
                     session_id=session.id,
                     unique_person_count=total_unique_people,
                     total_person_count=total_detected,
-                    first_time_visitor_count=None,
+                    first_time_visitor_count=first_time_visitor_count,
                     peak_occupancy=peak_occupancy_so_far,
                     average_occupancy=avg_occupancy,
                     entry_count=None,
                     exit_count=None,
-                    occupancy_timeline=occupancy_history,
+                    occupancy_timeline=downsampled_timeline,
                     output_video_path=output_path
                 )
                 session.completed_at = datetime.now(timezone.utc)
