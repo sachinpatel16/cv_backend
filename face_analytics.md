@@ -223,6 +223,8 @@ curl -X GET "http://localhost:8000/api/v1/faceanalytics/sessions" \
       "confidence_threshold": 0.35,
       "unique_person_count": 5,
       "total_person_count": 12,
+      "employee_count": 1,
+      "visitor_count": 4,
       "first_time_visitor_count": 1,
       "first_time_visitors": [
         {
@@ -231,6 +233,18 @@ curl -X GET "http://localhost:8000/api/v1/faceanalytics/sessions" \
           "first_seen": 15.40,
           "last_seen": 45.80,
           "dwell_time": 30.40
+        }
+      ],
+      "detected_employees": [
+        {
+          "id": "b34e5a99-df8c-4f91-872e-dcdbc47c617b",
+          "first_name": "John",
+          "last_name": "Doe",
+          "employee_code": "EMP101",
+          "photo_path": "storage/employee_registrations/e6235884-1bfa-42f3-93e3-35898bcdc3de/b34e5a99_portrait.jpg",
+          "first_seen": 12.50,
+          "last_seen": 25.00,
+          "dwell_time": 12.50
         }
       ],
       "peak_occupancy": 3,
@@ -280,6 +294,8 @@ curl -X GET "http://localhost:8000/api/v1/faceanalytics/sessions/55fa00f0-7bae-4
     "confidence_threshold": 0.35,
     "unique_person_count": 5,
     "total_person_count": 12,
+    "employee_count": 1,
+    "visitor_count": 4,
     "first_time_visitor_count": 1,
     "first_time_visitors": [
       {
@@ -288,6 +304,18 @@ curl -X GET "http://localhost:8000/api/v1/faceanalytics/sessions/55fa00f0-7bae-4
         "first_seen": 15.40,
         "last_seen": 45.80,
         "dwell_time": 30.40
+      }
+    ],
+    "detected_employees": [
+      {
+        "id": "b34e5a99-df8c-4f91-872e-dcdbc47c617b",
+        "first_name": "John",
+        "last_name": "Doe",
+        "employee_code": "EMP101",
+        "photo_path": "storage/employee_registrations/e6235884-1bfa-42f3-93e3-35898bcdc3de/b34e5a99_portrait.jpg",
+        "first_seen": 12.50,
+        "last_seen": 25.00,
+        "dwell_time": 12.50
       }
     ],
     "peak_occupancy": 3,
