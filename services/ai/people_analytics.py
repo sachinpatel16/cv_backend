@@ -1,26 +1,24 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
-from torchvision.models import ResNet18_Weights
 from torchvision import transforms
 import cv2
 import numpy as np
 from collections import defaultdict
+from modules.objectcount.osnet import osnet_x0_5
 
 class ReIDFeatureExtractor:
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Load feature extractor model (ResNet-18)
-        resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
-        self.feature_extractor = nn.Sequential(*list(resnet.children())[:-1])
+        # Load purpose-built Re-ID model (OSNet x0.5)
+        self.feature_extractor = osnet_x0_5(pretrained=True)
         self.feature_extractor.to(self.device)
         self.feature_extractor.eval()
         
-        # Crop preprocessing transform
+        # Crop preprocessing transform (256x128 standard for OSNet)
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((224, 224)),
+            transforms.Resize((256, 128)),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -39,10 +37,10 @@ class ReIDFeatureExtractor:
             crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             tensor = self.transform(crop_rgb).unsqueeze(0).to(self.device)
             features = self.feature_extractor(tensor)
+            
+            # L2 normalize
+            features = nn.functional.normalize(features, p=2, dim=1)
             features = features.squeeze().cpu().numpy()
-            norm = np.linalg.norm(features)
-            if norm > 0:
-                features = features / norm
             return features
         except Exception as e:
             print(f"Error extracting embedding: {e}")

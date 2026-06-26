@@ -305,6 +305,7 @@ async def _process_video_job(
                         "best_crop": crop if crop is not None and crop.size > 0 else None,
                         "best_crop_area": (x2 - x1) * (y2 - y1) if crop is not None and crop.size > 0 else 0,
                         "matched": False,
+                        "last_match_area": 0,
                         "frames_since_start": 1
                     }
                 else:

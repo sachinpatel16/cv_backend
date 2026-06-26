@@ -2,9 +2,15 @@ import os
 import sys
 import numpy as np
 import cv2
+import math
 from typing import Generator, List, Optional, Tuple, Dict
 from ultralytics import YOLO
 from services.camera_processors.video_service import VideoFrameExtractor
+
+FALL_WINDOW_SIZE = int(os.getenv("FALL_WINDOW_SIZE", 30))
+FALL_V_THRESH = float(os.getenv("FALL_V_THRESH", 60.0))
+FALL_AR_THRESH = float(os.getenv("FALL_AR_THRESH", 0.35))
+FALL_DY_THRESH = float(os.getenv("FALL_DY_THRESH", 20.0))
 
 class LoiteringTracker:
     def __init__(self):
@@ -55,7 +61,8 @@ class ActivityDetectionService:
     def _lazy_init(self):
         if self.model is None:
             # Loads yolov8n-pose.pt (will auto-download if missing)
-            self.model = YOLO("yolov8n-pose.pt")
+            self.model = YOLO("yolov26n-pose.pt")
+            # self.model = YOLO("yolov26n-pose.pt")
 
     def inside_polygon(self, point: Tuple[int, int], polygon: np.ndarray) -> bool:
         """Checks if a point (x, y) is inside the polygon."""
@@ -75,7 +82,7 @@ class ActivityDetectionService:
         occupancy_limit: int = 5,
         detect_sleeping: bool = True,
         detect_walking: bool = True,
-        interval: float = 1.0,
+        interval: float = 0.1,
     ) -> Generator[dict, None, None]:
         """
         Processes a video frame-by-frame using VideoFrameExtractor, applying ROI, pose, loitering, and occupancy heuristics.
@@ -172,12 +179,18 @@ class ActivityDetectionService:
                         "rel_wrist_r": [],
                         "rel_elbow_l": [],
                         "rel_elbow_r": [],
+                        "horizontal_history": [],
+                        "horizontal_start_time": None,
+                        "centers": [],
+                        "com_history": [],
+                        "ar_history": [],
                         "last_fall_alert": -10.0,
                         "last_intrusion_alert": -10.0,
                         "last_aggression_alert": -10.0,
                         "last_loitering_alert": -10.0,
                         "last_sleeping_alert": -10.0,
                         "last_walking_alert": -10.0,
+                        "fall_pose_window": [],
                     }
                 
                 history = person_history[track_id]
@@ -209,17 +222,97 @@ class ActivityDetectionService:
                 if len(history["rel_elbow_r"]) > 10:
                     history["rel_elbow_r"].pop(0)
 
-                # Slip calculation
+                # Track horizontal history & sleeping state duration
+                history["horizontal_history"].append(is_horizontal)
+                if len(history["horizontal_history"]) > 15:
+                    history["horizontal_history"].pop(0)
+
+                if is_horizontal:
+                    if history["horizontal_start_time"] is None:
+                        history["horizontal_start_time"] = sec
+                else:
+                    history["horizontal_start_time"] = None
+
+                # Fall / Slip detection (using logic from Human-Fall-Detection-master)
+                is_falling = False
                 is_slipping = False
-                if len(history["hip_y"]) >= 3:
-                    y_delta = history["hip_y"][-1] - history["hip_y"][-3]
-                    norm_delta = y_delta / (box_height + 1e-6)
-                    if norm_delta > 0.25 and is_horizontal:
+                
+                # Check if pose has required keypoints for tracking center of mass
+                # Required: left eye (1), right eye (2), left shoulder (5), right shoulder (6)
+                required_joints = [1, 2, 5, 6]
+                is_complete = all(conf[idx] > 0.2 for idx in required_joints) and np.sum(conf > 0.2) >= 10
+                
+                if is_complete:
+                    scale_to_960 = 960.0 / w_orig
+                    xy_960 = xy * scale_to_960
+                    history["fall_pose_window"].append((xy_960, conf, sec))
+                    if len(history["fall_pose_window"]) > FALL_WINDOW_SIZE:
+                        history["fall_pose_window"].pop(0)
+                
+                if len(history["fall_pose_window"]) >= FALL_WINDOW_SIZE:
+                    p1_xy, p1_conf, p1_sec = history["fall_pose_window"][0]
+                    p2_xy, p2_conf, p2_sec = history["fall_pose_window"][-1]
+                    
+                    # Compute Center of Mass (COM)
+                    c1 = np.mean([p1_xy[1], p1_xy[2], p1_xy[5], p1_xy[6]], axis=0)
+                    c2 = np.mean([p2_xy[1], p2_xy[2], p2_xy[5], p2_xy[6]], axis=0)
+                    
+                    dx = c2[0] - c1[0]
+                    dy = c2[1] - c1[1]
+                    dist = np.sqrt(dx**2 + dy**2)
+                    
+                    # Duration in seconds
+                    t_duration = p2_sec - p1_sec
+                    if t_duration <= 0:
+                        t_duration = 0.1
+                    velocity = min(dist / t_duration, 300.0)
+                    
+                    # Aspect Ratio function
+                    def _get_aspect_ratio(kpts_xy, kpts_conf):
+                        visible = kpts_xy[kpts_conf > 0.2]
+                        if len(visible) == 0:
+                            return 0.0
+                        x_coords = visible[:, 0]
+                        y_coords = visible[:, 1]
+                        w_box = np.max(x_coords) - np.min(x_coords)
+                        h_box = np.max(y_coords) - np.min(y_coords)
+                        return w_box / h_box if h_box > 0 else 0.0
+                    
+                    ar_start = _get_aspect_ratio(p1_xy, p1_conf)
+                    ar_end = _get_aspect_ratio(p2_xy, p2_conf)
+                    ar_delta = ar_end - ar_start
+                    
+                    # Check SpeedDrop (velocity threshold and vertical drop threshold)
+                    if velocity > FALL_V_THRESH and dy > FALL_DY_THRESH and ar_end > 0.1:
+                        is_falling = True
+                        
+                    # Check DownFlat (vertical drop threshold and aspect ratio threshold)
+                    if dy > FALL_DY_THRESH and ar_delta > FALL_AR_THRESH:
                         is_slipping = True
 
                 # Determine if alert needed
                 center_x = int((xmin + xmax) / 2)
                 center_y = int((ymin + ymax) / 2)
+
+                # Track center history
+                history["centers"].append((center_x, center_y, sec))
+                while history["centers"] and sec - history["centers"][0][2] > 2.0:
+                    history["centers"].pop(0)
+
+                # Velocity-based movement detection
+                is_moving = False
+                if len(history["centers"]) >= 2:
+                    oldest_center = history["centers"][0]
+                    for c in history["centers"]:
+                        if sec - c[2] >= 0.5:
+                            oldest_center = c
+                            break
+                    dt = sec - oldest_center[2]
+                    if dt >= 0.3:
+                        dist = np.sqrt((center_x - oldest_center[0])**2 + (center_y - oldest_center[1])**2)
+                        velocity = dist / (box_height + 1e-6) / dt
+                        if velocity > 0.08:
+                            is_moving = True
 
                 # Check ROI intrusion
                 is_intruded = False
@@ -232,7 +325,9 @@ class ActivityDetectionService:
                     "bbox": [xmin, ymin, xmax, ymax],
                     "center": (center_x, center_y),
                     "is_horizontal": is_horizontal,
+                    "is_falling": is_falling,
                     "is_slipping": is_slipping,
+                    "is_moving": is_moving,
                     "is_intruded": is_intruded,
                     "xy": xy,
                     "conf": conf,
@@ -247,7 +342,7 @@ class ActivityDetectionService:
                 
                 # Fall/Slip alert
                 if detect_fall:
-                    if det["is_slipping"] or det["is_horizontal"]:
+                    if det["is_slipping"] or det["is_falling"]:
                         if sec - hist["last_fall_alert"] >= 5.0:  # 5-second cooldown
                             hist["last_fall_alert"] = sec
                             alert_type = "slipping" if det["is_slipping"] else "falling"
@@ -291,19 +386,21 @@ class ActivityDetectionService:
 
                 # Sleeping alert
                 if detect_sleeping and det["is_horizontal"]:
-                    if sec - hist["last_sleeping_alert"] >= 10.0:
-                        hist["last_sleeping_alert"] = sec
-                        yield {
-                            "track_id": t_id,
-                            "activity_type": "sleeping",
-                            "timestamp": sec,
-                            "bbox": det["bbox"],
-                            "severity": "info",
-                            "frame": frame
-                        }
+                    horizontal_duration = sec - hist["horizontal_start_time"] if hist["horizontal_start_time"] is not None else 0.0
+                    if horizontal_duration >= 5.0:
+                        if sec - hist["last_sleeping_alert"] >= 10.0 and sec - hist["last_fall_alert"] >= 15.0:
+                            hist["last_sleeping_alert"] = sec
+                            yield {
+                                "track_id": t_id,
+                                "activity_type": "sleeping",
+                                "timestamp": sec,
+                                "bbox": det["bbox"],
+                                "severity": "info",
+                                "frame": frame
+                            }
 
                 # Walking alert
-                if detect_walking and det["aspect_ratio"] > 1.2 and not det["is_horizontal"]:
+                if detect_walking and det["aspect_ratio"] > 1.2 and not det["is_horizontal"] and det["is_moving"]:
                     if sec - hist["last_walking_alert"] >= 10.0:
                         hist["last_walking_alert"] = sec
                         yield {

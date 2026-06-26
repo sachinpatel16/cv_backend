@@ -119,7 +119,6 @@ class FaceTracker:
 
         # 1. Associate detected faces with active tracks based on IoU with predicted bbox
         for face_id, track in list(self.tracks.items()):
-            best_iou = 0
             best_det_idx = -1
             
             # Skip spatial matching if the track has been lost for too long, to prevent ID swapping
@@ -132,7 +131,7 @@ class FaceTracker:
                         best_iou = iou
                         best_det_idx = det_idx
 
-            if best_iou >= self.iou_threshold:
+            if best_det_idx != -1:
                 det = detected_faces[best_det_idx]
                 matched_detections.add(best_det_idx)
                 
@@ -205,6 +204,7 @@ class FaceTracker:
                 "embedding": det.get("embedding"),
                 "best_crop": det.get("crop"),
                 "matched": False,
+                "last_match_area": 0,
                 "matched_type": None,  # "employee" or "visitor"
                 "matched_id": None,    # employee_id or visitor_id
                 "label": f"Face #{self.next_id}",
