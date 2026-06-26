@@ -15,6 +15,10 @@ from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
 from modules.employees.model import Employee
 from modules.faceanalytics.repository import FaceAnalyticsRepository
 from modules.peoplecount.tracker import KalmanFilter
+from modules.employees.cache import get_cached_employee_embeddings
+from services.ai.math_utils import map_similarity_threshold, find_best_match_in_cache
+from modules.employees.repository import EmployeeRepository
+from database.redis import get_redis_client, init_redis
 from shared.utils.video_format import videoFormatChanger
 cv2.setNumThreads(0)
 FACE_OUTPUTS_DIR = os.path.join("storage", "face_analytics_outputs")
@@ -120,6 +124,7 @@ class FaceTracker:
 
         # 1. Associate detected faces with active tracks based on IoU with predicted bbox
         for face_id, track in list(self.tracks.items()):
+            best_iou = 0
             best_det_idx = -1
             
             # Skip spatial matching if the track has been lost for too long, to prevent ID swapping
@@ -132,7 +137,7 @@ class FaceTracker:
                         best_iou = iou
                         best_det_idx = det_idx
 
-            if best_det_idx != -1:
+            if best_iou >= self.iou_threshold and best_det_idx != -1:
                 det = detected_faces[best_det_idx]
                 matched_detections.add(best_det_idx)
                 
@@ -264,6 +269,10 @@ def process_face_analytics_task(
             await db.commit()
 
             try:
+                if get_redis_client() is None:
+                    await init_redis()
+                employee_cache = await get_cached_employee_embeddings(db, session.tenant_id)
+
                 cap = cv2.VideoCapture(filepath)
                 if not cap.isOpened():
                     raise ValueError("Could not open video file.")
@@ -387,46 +396,58 @@ def process_face_analytics_task(
                         if not track["matched"] and track["occurrences"] >= 5 and track["embedding"] is not None:
                             from services.ai.math_utils import map_similarity_threshold
                             mapped_threshold = map_similarity_threshold(similarity_threshold)
-                            match_vis = await repo.find_similar_visitor(
-                                session.tenant_id,
-                                track["embedding"].tolist(),
-                                mapped_threshold,
-                                class_id=1
-                            )
-                            if match_vis:
-                                visitor, sim = match_vis
+                            
+                            # 1. First, try matching against registered employees
+                            match_emp = find_best_match_in_cache(track["embedding"], employee_cache, mapped_threshold)
+                            if match_emp:
+                                employee, sim = match_emp
                                 track["matched"] = True
-                                track["matched_type"] = "visitor"
-                                track["matched_id"] = visitor.id
-                                track["label"] = f"Visitor #{str(visitor.id)[:4]}"
-                                
-                                # Update track color deterministically based on UUID BGR
-                                b = track["matched_id"].bytes
-                                r = b[0] % 200 + 55
-                                g = b[1] % 200 + 55
-                                bg = b[2] % 200 + 55
-                                track["color"] = (bg, g, r)
-
-                                await repo.create_person_embedding(
-                                    identity_id=visitor.id,
-                                    embedding=track["embedding"].tolist(),
-                                    bbox=track["bbox"],
-                                    timestamp=timestamp_sec
-                                )
+                                track["matched_type"] = "employee"
+                                track["matched_id"] = employee.id
+                                track["label"] = f"{employee.first_name} (EMP)"
+                                track["color"] = (0, 255, 0) # Green for employees
                             else:
-                                visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
-                                track["matched"] = True
-                                track["matched_type"] = "visitor"
-                                track["matched_id"] = visitor.id
-                                track["label"] = "New Visitor"
-                                track["color"] = (0, 0, 255) # Red for new visitors
-
-                                await repo.create_person_embedding(
-                                    identity_id=visitor.id,
-                                    embedding=track["embedding"].tolist(),
-                                    bbox=track["bbox"],
-                                    timestamp=timestamp_sec
+                                # 2. Fallback to visitor matching
+                                match_vis = await repo.find_similar_visitor(
+                                    session.tenant_id,
+                                    track["embedding"].tolist(),
+                                    mapped_threshold,
+                                    class_id=1
                                 )
+                                if match_vis:
+                                    visitor, sim = match_vis
+                                    track["matched"] = True
+                                    track["matched_type"] = "visitor"
+                                    track["matched_id"] = visitor.id
+                                    track["label"] = f"Visitor #{str(visitor.id)[:4]}"
+                                    
+                                    # Update track color deterministically based on UUID BGR
+                                    b = track["matched_id"].bytes
+                                    r = b[0] % 200 + 55
+                                    g = b[1] % 200 + 55
+                                    bg = b[2] % 200 + 55
+                                    track["color"] = (bg, g, r)
+
+                                    await repo.create_person_embedding(
+                                        identity_id=visitor.id,
+                                        embedding=track["embedding"].tolist(),
+                                        bbox=track["bbox"],
+                                        timestamp=timestamp_sec
+                                    )
+                                else:
+                                    visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                                    track["matched"] = True
+                                    track["matched_type"] = "visitor"
+                                    track["matched_id"] = visitor.id
+                                    track["label"] = "New Visitor"
+                                    track["color"] = (0, 0, 255) # Red for new visitors
+
+                                    await repo.create_person_embedding(
+                                        identity_id=visitor.id,
+                                        embedding=track["embedding"].tolist(),
+                                        bbox=track["bbox"],
+                                        timestamp=timestamp_sec
+                                    )
 
                         # Draw box and label
                         tx1, ty1, tx2, ty2 = map(int, track["bbox"])
@@ -486,46 +507,68 @@ def process_face_analytics_task(
 
                 # 2. Resolve database PersonIdentity IDs for all valid tracks
                 for face_id, track in valid_tracks.items():
+                    if track.get("matched_type") == "employee":
+                        continue
+
                     visitor_id = track["matched_id"]
                     if visitor_id is None:
                         if track["embedding"] is not None:
                             from services.ai.math_utils import map_similarity_threshold
                             mapped_threshold = map_similarity_threshold(similarity_threshold)
-                            match_vis = await repo.find_similar_visitor(
-                                session.tenant_id,
-                                track["embedding"].tolist(),
-                                mapped_threshold,
-                                class_id=1
-                            )
-                            if match_vis:
-                                visitor, sim = match_vis
-                                visitor_id = visitor.id
-                                track["matched_id"] = visitor_id
-                                track["label"] = f"Visitor #{str(visitor.id)[:4]}"
+                            
+                            # Try matching employee first in post-processing
+                            match_emp = find_best_match_in_cache(track["embedding"], employee_cache, mapped_threshold)
+                            if match_emp:
+                                employee, sim = match_emp
+                                track["matched"] = True
+                                track["matched_type"] = "employee"
+                                track["matched_id"] = employee.id
+                                track["label"] = f"{employee.first_name} (EMP)"
                             else:
-                                visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
-                                visitor_id = visitor.id
-                                track["matched_id"] = visitor_id
-                                track["label"] = "New Visitor"
-                                await repo.create_person_embedding(
-                                    identity_id=visitor.id,
-                                    embedding=track["embedding"].tolist(),
-                                    bbox=track["bbox"],
-                                    timestamp=track["first_seen_time"]
+                                # Fallback to visitor matching
+                                match_vis = await repo.find_similar_visitor(
+                                    session.tenant_id,
+                                    track["embedding"].tolist(),
+                                    mapped_threshold,
+                                    class_id=1
                                 )
+                                if match_vis:
+                                    visitor, sim = match_vis
+                                    visitor_id = visitor.id
+                                    track["matched_id"] = visitor_id
+                                    track["matched_type"] = "visitor"
+                                    track["label"] = f"Visitor #{str(visitor.id)[:4]}"
+                                else:
+                                    visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                                    visitor_id = visitor.id
+                                    track["matched_id"] = visitor_id
+                                    track["matched_type"] = "visitor"
+                                    track["label"] = "New Visitor"
+                                    await repo.create_person_embedding(
+                                        identity_id=visitor.id,
+                                        embedding=track["embedding"].tolist(),
+                                        bbox=track["bbox"],
+                                        timestamp=track["first_seen_time"]
+                                    )
                         else:
                             visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
                             visitor_id = visitor.id
                             track["matched_id"] = visitor_id
+                            track["matched_type"] = "visitor"
                             track["label"] = "New Visitor"
+                    else:
+                        # If already matched during frame loop, make sure matched_type is set to visitor if not employee
+                        if track.get("matched_type") is None:
+                            track["matched_type"] = "visitor"
 
                 # 3. Group tracks by resolved visitor_id to save only the single best crop per unique visitor
                 from collections import defaultdict
                 tracks_by_visitor = defaultdict(list)
                 for face_id, track in valid_tracks.items():
-                    visitor_id = track["matched_id"]
-                    if visitor_id is not None:
-                        tracks_by_visitor[visitor_id].append(track)
+                    if track.get("matched_type") == "visitor":
+                        visitor_id = track["matched_id"]
+                        if visitor_id is not None:
+                            tracks_by_visitor[visitor_id].append(track)
 
                 visitor_crop_paths = {}
                 for visitor_id, v_tracks in tracks_by_visitor.items():
@@ -540,19 +583,20 @@ def process_face_analytics_task(
                         cv2.imwrite(crop_path, best_track["best_crop"])
                     visitor_crop_paths[visitor_id] = crop_path
 
-                # 4. Prepare and write completed occurrences
+                # 4. Prepare and write completed occurrences for visitors
                 completed_occurrences = []
                 for face_id, track in valid_tracks.items():
-                    visitor_id = track["matched_id"]
-                    crop_path = visitor_crop_paths.get(visitor_id) if visitor_id else None
-                    completed_occurrences.append({
-                        "session_id": session.id,
-                        "identity_id": visitor_id,
-                        "tracker_id": face_id,
-                        "first_seen": track["first_seen_time"],
-                        "last_seen": track["last_seen_time"],
-                        "crop_path": crop_path
-                    })
+                    if track.get("matched_type") == "visitor":
+                        visitor_id = track["matched_id"]
+                        crop_path = visitor_crop_paths.get(visitor_id) if visitor_id else None
+                        completed_occurrences.append({
+                            "session_id": session.id,
+                            "identity_id": visitor_id,
+                            "tracker_id": face_id,
+                            "first_seen": track["first_seen_time"],
+                            "last_seen": track["last_seen_time"],
+                            "crop_path": crop_path
+                        })
 
                 # Write visitor occurrences to database
                 for occ in completed_occurrences:
@@ -565,13 +609,33 @@ def process_face_analytics_task(
                         crop_path=occ["crop_path"]
                     )
 
-                # Calculate stats (without employee matching, count unique people by database visitor IDs)
-                unique_visitors = {occ["identity_id"] for occ in completed_occurrences}
-                total_unique_people = len(unique_visitors)
-                total_detected = len(completed_occurrences)
+                # 5. Log employee attendance
+                emp_repo = EmployeeRepository(db)
+                for face_id, track in valid_tracks.items():
+                    if track.get("matched_type") == "employee" and track["matched_id"] is not None:
+                        await emp_repo.log_employee_attendance(
+                            tenant_id=session.tenant_id,
+                            employee_id=track["matched_id"],
+                            session_id=session.id,
+                            first_seen_sec=track["first_seen_time"],
+                            last_seen_sec=track["last_seen_time"],
+                            occurrence_increment=track["occurrences"],
+                            detection_time=now_ts
+                        )
+
+                # Calculate stats (segmenting employee and visitor counts)
+                unique_employee_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("matched_type") == "employee" and t["matched_id"] is not None}
+                unique_visitor_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("matched_type") == "visitor" and t["matched_id"] is not None}
+                
+                employee_count = len(unique_employee_ids)
+                visitor_count = len(unique_visitor_ids)
+                total_unique_people = employee_count + visitor_count
+                
+                # Total detections includes visitor occurrences + unique employees
+                total_detected = len(completed_occurrences) + employee_count
 
                 # Calculate new visitor counts
-                new_visitor_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("label") == "New Visitor" and t["matched_id"] is not None}
+                new_visitor_ids = {t["matched_id"] for t in valid_tracks.values() if t.get("label") == "New Visitor" and t["matched_id"] is not None and t.get("matched_type") == "visitor"}
                 first_time_visitor_count = len(new_visitor_ids)
 
                 total_occupancy_sum = sum(h["occupancy"] for h in occupancy_history)
@@ -603,6 +667,8 @@ def process_face_analytics_task(
                     occupancy_timeline=downsampled_timeline,
                     output_video_path=output_path
                 )
+                session.employee_count = employee_count
+                session.visitor_count = visitor_count
                 session.completed_at = datetime.now(timezone.utc)
                 await db.commit()
 
