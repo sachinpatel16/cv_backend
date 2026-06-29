@@ -572,6 +572,12 @@ async def _process_video_job(
     cap.release()
     output_writer.release()
 
+    # Transcode output video to browser-compatible H.264 format using shared video utility
+    try:
+        videoFormatChanger(output_path, formats="h264", overwrite_input=True)
+    except Exception as e:
+        print(f"Video transcoding failed (falling back to raw mp4v): {e}")
+
     # Filter out very short, spurious tracks (e.g. tracks that lasted less than 10 frames)
     # BUT keep those that crossed the line so we can resolve their identity for crossing logs
     MIN_TRACK_FRAMES = 10

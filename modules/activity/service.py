@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.activity.repository import ActivityRepository
 from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
-from modules.activity.schema import ActivityConfigPayload
+from modules.activity.schema import ActivityProcessPayload
 from shared.utils.image import convert_and_save_image
 
 ACTIVITY_MEDIA_DIR = os.path.join("storage", "activity_media")
@@ -77,7 +77,8 @@ class ActivityService:
                 detect_occupancy=True,
                 occupancy_limit=5,
                 detect_sleeping=True,
-                detect_walking=True
+                detect_walking=True,
+                selected_activities=None
             )
             await self.db.commit()
 
@@ -108,32 +109,21 @@ class ActivityService:
         await self.repo.delete_activity_media(media_id, tenant_id)
         await self.db.commit()
 
-    async def get_config(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> ActivityConfig:
-        """Fetch the detection config for the media, raises 404 if not found."""
-        config = await self.repo.get_activity_config(media_id, tenant_id)
-        if not config:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Configuration not found or unauthorized access."
-            )
-        return config
-
-    async def configure_activity(
-        self, media_id: uuid.UUID, tenant_id: uuid.UUID, payload: ActivityConfigPayload
-    ) -> ActivityConfig:
+    async def process_activity_media(
+        self, media_id: uuid.UUID, tenant_id: uuid.UUID, payload: ActivityProcessPayload
+    ) -> ActivityMedia:
         """
-        Configure ROI boundaries and active trackers for a media source.
-        Re-triggers background processing task to recheck with new polygon coordinates.
+        Update tracking configuration settings and trigger the background Celery process.
         """
-        # Verify media exists and belongs to tenant
         media = await self.repo.get_activity_media_by_id(media_id, tenant_id)
         if not media:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Activity media not found or unauthorized access."
+                detail="Activity media source not found or unauthorized access."
             )
 
-        config = await self.repo.upsert_activity_config(
+        # Upsert the config in database using the payload settings
+        await self.repo.upsert_activity_config(
             media_id=media_id,
             tenant_id=tenant_id,
             polygon_points=payload.polygon_points,
@@ -145,30 +135,31 @@ class ActivityService:
             detect_occupancy=payload.detect_occupancy,
             occupancy_limit=payload.occupancy_limit,
             detect_sleeping=payload.detect_sleeping,
-            detect_walking=payload.detect_walking
+            detect_walking=payload.detect_walking,
+            selected_activities=payload.selected_activities
         )
         await self.db.commit()
 
-        # Re-trigger detection task if ROI/config changes
         try:
             await self.repo.update_media_status(media_id, "processing")
             await self.db.commit()
 
             from modules.activity.tasks import process_activity_media_task
-            process_activity_media_task.delay(str(media_id), interval=0.033)
+            process_activity_media_task.delay(str(media_id), interval=payload.interval)
         except Exception as e:
             await self.repo.update_media_status(media_id, "failed")
             await self.db.commit()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to submit background task after updating config: {e}"
+                detail=f"Failed to submit background activity tracking task: {e}"
             )
 
-        return config
+        media.status = "processing"
+        return media
 
-    async def process_activity_media(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> ActivityMedia:
+    async def get_process_status(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> dict:
         """
-        Manually trigger the background Celery processing for a specific activity media source.
+        Retrieves the current execution status and configuration details for a media source.
         """
         media = await self.repo.get_activity_media_by_id(media_id, tenant_id)
         if not media:
@@ -176,23 +167,26 @@ class ActivityService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Activity media source not found or unauthorized access."
             )
+        
+        config = await self.repo.get_activity_config(media_id, tenant_id)
+        return {
+            "media_id": media.id,
+            "status": media.status,
+            "output_filepath": media.output_filepath,
+            "config": config
+        }
 
-        try:
-            await self.repo.update_media_status(media_id, "processing")
-            await self.db.commit()
-
-            from modules.activity.tasks import process_activity_media_task
-            process_activity_media_task.delay(str(media_id), interval=0.033)
-        except Exception as e:
-            await self.repo.update_media_status(media_id, "failed")
-            await self.db.commit()
+    async def get_process_history(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> List[ActivityAlert]:
+        """
+        Retrieves historical alerts generated for this specific media source.
+        """
+        media = await self.repo.get_activity_media_by_id(media_id, tenant_id)
+        if not media:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to submit manual background activity tracking task: {e}"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Activity media source not found or unauthorized access."
             )
-
-        media.status = "processing"
-        return media
+        return await self.repo.get_alerts(tenant_id=tenant_id, media_id=media_id)
 
     async def get_alerts_report(
         self, tenant_id: uuid.UUID, media_id: Optional[uuid.UUID] = None,

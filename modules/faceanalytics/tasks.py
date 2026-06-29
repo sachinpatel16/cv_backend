@@ -19,6 +19,7 @@ from modules.employees.cache import get_cached_employee_embeddings
 from services.ai.math_utils import map_similarity_threshold, find_best_match_in_cache, is_face_occluded
 from modules.employees.repository import EmployeeRepository
 from database.redis import get_redis_client, init_redis
+from shared.utils.video_format import videoFormatChanger
 cv2.setNumThreads(0)
 FACE_OUTPUTS_DIR = os.path.join("storage", "face_analytics_outputs")
 os.makedirs(FACE_OUTPUTS_DIR, exist_ok=True)
@@ -420,6 +421,12 @@ def process_face_analytics_task(
 
                 cap.release()
                 output_writer.release()
+
+                # Transcode output video to browser-compatible H.264 format using shared video utility
+                try:
+                    videoFormatChanger(output_path, formats="h264", overwrite_input=True)
+                except Exception as e:
+                    print(f"Video transcoding failed (falling back to raw mp4v): {e}")
 
                 # Process final logs and occurrence records
                 from datetime import datetime, timezone

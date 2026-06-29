@@ -11,6 +11,7 @@ class ActivityMediaBase(BaseModel):
 class ActivityMediaResponse(ActivityMediaBase):
     id: UUID
     filepath: str
+    output_filepath: Optional[str] = None
     status: str
     created_at: datetime
 
@@ -28,6 +29,10 @@ class ActivityConfigBase(BaseModel):
     occupancy_limit: int = 5
     detect_sleeping: bool = True
     detect_walking: bool = True
+    selected_activities: Optional[List[str]] = Field(
+        None,
+        description="Specific custom activities from labels.txt to detect. If null/empty, defaults apply."
+    )
     polygon_points: Optional[List[List[int]]] = Field(
         None, 
         description="Coordinates of the Region of Interest polygon, e.g. [[x1, y1], [x2, y2], ...]"
@@ -43,6 +48,21 @@ class ActivityConfigResponse(ActivityConfigBase):
 
     class Config:
         from_attributes = True
+
+
+class ActivityProcessPayload(ActivityConfigBase):
+    interval: float = Field(1.0, description="Frame sampling interval in seconds")
+
+
+class ActivityProcessStatusResponse(BaseModel):
+    media_id: UUID
+    status: str
+    output_filepath: Optional[str] = None
+    config: Optional[ActivityConfigResponse] = None
+
+    class Config:
+        from_attributes = True
+
 
 
 # --- ALERT REPORT SCHEMAS ---

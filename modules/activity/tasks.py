@@ -60,6 +60,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
             occupancy_limit = 5
             detect_sleeping = True
             detect_walking = True
+            selected_activities = None
 
             if config:
                 polygon_points = config.polygon_points
@@ -72,95 +73,190 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                 occupancy_limit = config.occupancy_limit
                 detect_sleeping = config.detect_sleeping
                 detect_walking = config.detect_walking
+                selected_activities = config.selected_activities
+
+            output_filepath = None
+            if media.media_type == "video":
+                output_filepath = os.path.join(
+                    "storage", "activity_media", f"output_{media.id}.mp4"
+                )
+            else:
+                output_filepath = os.path.join(
+                    "storage", "activity_media", f"output_{media.id}.jpg"
+                )
 
             try:
-                # 3. Process video frame-by-frame
-                for alert in activity_detection_service.process_video(
-                    video_path=media.filepath,
-                    polygon_points=polygon_points,
-                    detect_fall=detect_fall,
-                    detect_aggression=detect_aggression,
-                    detect_intrusion=detect_intrusion,
-                    detect_loitering=detect_loitering,
-                    loitering_threshold=loitering_threshold,
-                    detect_occupancy=detect_occupancy,
-                    occupancy_limit=occupancy_limit,
-                    detect_sleeping=detect_sleeping,
-                    detect_walking=detect_walking,
-                    interval=interval
-                ):
-                    orig_frame = alert["frame"]
-                    bbox = alert["bbox"]
-                    activity_type = alert["activity_type"]
-                    timestamp = alert["timestamp"]
-                    track_id = alert["track_id"]
-                    severity = alert["severity"]
-
-                    # Generate a unique path for the alert snapshot
-                    snapshot_filename = f"{media.id}_{activity_type}_track{track_id}_{int(timestamp * 1000)}.jpg"
-                    snapshot_path = os.path.join(ALERT_SNAPSHOTS_DIR, snapshot_filename)
-
-                    # Generate the snapshot image based on alert type
-                    if activity_type == "roi_intrusion" and bbox:
-                        # Apply black mask except for the bounding box of the intruder (Theft Detection requirement)
-                        mask = np.zeros_like(orig_frame)
-                        x1, y1, x2, y2 = bbox
-                        cv2.rectangle(mask, (x1, y1), (x2, y2), (255, 255, 255), -1)
-                        masked_frame = cv2.bitwise_and(orig_frame, mask)
+                # 3. Process media
+                if media.media_type == "photo":
+                    # For photos, run simple single frame inference
+                    img = cv2.imread(media.filepath)
+                    if img is not None:
+                        h_orig, w_orig = img.shape[:2]
+                        # Downscale for processing speed similar to VideoFrameExtractor
+                        max_dim = 640
+                        scale = 1.0
+                        if max(h_orig, w_orig) > max_dim:
+                            scale = max_dim / max(h_orig, w_orig)
+                            img_small = cv2.resize(img, (int(w_orig * scale), int(h_orig * scale)))
+                        else:
+                            img_small = img
+                            
+                        # Lazy load TF model
+                        activity_detection_service._lazy_init_tf()
+                        frame_exp = np.expand_dims(img_small, axis=0)
                         
-                        # Add red bounding box and label
-                        cv2.rectangle(masked_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                        cv2.putText(masked_frame, "INTRUDER", (x1, max(y1 - 10, 20)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        output_dict = activity_detection_service.tf_sess.run(
+                            activity_detection_service.tf_output_tensors,
+                            feed_dict={activity_detection_service.tf_input_tensor: frame_exp}
+                        )
                         
-                        # Draw ROI boundary polygon on the snapshot if config exists
+                        num_detections = int(output_dict['num_detections'][0])
+                        detection_classes = output_dict['detection_classes'][0].astype(np.uint8)
+                        detection_boxes = output_dict['detection_boxes'][0]
+                        detection_scores = output_dict['detection_scores'][0]
+                        
+                        # Target activities
+                        target_labels = None
+                        if selected_activities and len(selected_activities) > 0:
+                            target_labels = {lbl.lower().strip() for lbl in selected_activities}
+                        else:
+                            target_labels = set()
+                            if detect_fall:
+                                target_labels.add("fall down")
+                                target_labels.add("get up")
+                            if detect_sleeping:
+                                target_labels.add("lie/sleep")
+                            if detect_walking:
+                                target_labels.add("walk")
+                                target_labels.add("run/jog")
+                                target_labels.add("stand")
+                                target_labels.add("crouch/kneel")
+                                target_labels.add("bend/bow (at the waist)")
+                            if not target_labels:
+                                exclusions = {1, 3, 17, 37, 43, 45, 46, 47, 59, 65, 74, 77, 78, 79, 80}
+                                target_labels = {
+                                    activity_detection_service.tf_labels[idx].lower().strip()
+                                    for idx in range(len(activity_detection_service.tf_labels))
+                                    if (idx + 1) not in exclusions and activity_detection_service.tf_labels[idx] != "N/A"
+                                }
+                                
+                        polygon_np = None
                         if polygon_points and len(polygon_points) >= 3:
-                            pts = np.array(polygon_points, dtype=np.int32)
-                            cv2.polylines(masked_frame, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+                            polygon_np = np.array(polygon_points, dtype=np.int32)
+                            
+                        colors = np.random.uniform(0, 255, size=(len(activity_detection_service.tf_labels) + 1, 3))
+                        img_annotated = img.copy()
                         
-                        cv2.imwrite(snapshot_path, masked_frame)
-                    else:
-                        # Draw bounding box and label on the copy of the original frame
+                        if polygon_np is not None:
+                            cv2.polylines(img_annotated, [polygon_np], isClosed=True, color=(0, 255, 0), thickness=2)
+                            
+                        for i in range(num_detections):
+                            score = float(detection_scores[i])
+                            if score < 0.5:
+                                continue
+                                
+                            class_idx = int(detection_classes[i]) - 1
+                            if class_idx < 0 or class_idx >= len(activity_detection_service.tf_labels):
+                                continue
+                                
+                            label = activity_detection_service.tf_labels[class_idx]
+                            label_clean = label.lower().strip()
+                            
+                            if label == "N/A" or label_clean not in target_labels:
+                                continue
+                                
+                            bbox_norm = detection_boxes[i]
+                            ymin = int(bbox_norm[0] * h_orig)
+                            xmin = int(bbox_norm[1] * w_orig)
+                            ymax = int(bbox_norm[2] * h_orig)
+                            xmax = int(bbox_norm[3] * w_orig)
+                            
+                            center_x = (xmin + xmax) // 2
+                            center_y = (ymin + ymax) // 2
+                            if polygon_np is not None:
+                                is_inside = cv2.pointPolygonTest(polygon_np, (float(center_x), float(center_y)), False) >= 0
+                                if not is_inside:
+                                    continue
+                                    
+                            severity = "info"
+                            if label_clean in ["fall down", "fight/hit (a person)", "push (another person)", "grab (a person)"]:
+                                severity = "critical"
+                            elif label_clean in ["run/jog", "crouch/kneel", "get up", "jump/leap"]:
+                                severity = "warning"
+                                
+                            # Annotate frame
+                            color = colors[class_idx + 1]
+                            cv2.rectangle(img_annotated, (xmin, ymin), (xmax, ymax), color, 2)
+                            text = f"{label} ({score:.2f})"
+                            cv2.putText(img_annotated, text, (xmin, max(ymin - 10, 20)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                        
+                            # Save alert snapshot
+                            snapshot_filename = f"{media.id}_{label.replace('/', '_')}_trackNone_0.jpg"
+                            snapshot_path = os.path.join(ALERT_SNAPSHOTS_DIR, snapshot_filename)
+                            cv2.imwrite(snapshot_path, img_annotated)
+                            
+                            await repo.create_activity_alert(
+                                tenant_id=media.tenant_id,
+                                media_id=media.id,
+                                track_id=None,
+                                activity_type=label,
+                                timestamp=0.0,
+                                bbox=[xmin, ymin, xmax, ymax],
+                                snapshot_path=snapshot_path,
+                                severity=severity
+                            )
+                        # Save main output image
+                        cv2.imwrite(output_filepath, img_annotated)
+                else:
+                    # For videos, call the TF video processing generator
+                    for alert in activity_detection_service.process_video_tf(
+                        video_path=media.filepath,
+                        output_video_path=output_filepath,
+                        polygon_points=polygon_points,
+                        selected_activities=selected_activities,
+                        detect_fall=detect_fall,
+                        detect_sleeping=detect_sleeping,
+                        detect_walking=detect_walking,
+                        interval=interval
+                    ):
+                        orig_frame = alert["frame"]
+                        bbox = alert["bbox"]
+                        activity_type = alert["activity_type"]
+                        timestamp = alert["timestamp"]
+                        severity = alert["severity"]
+                        
+                        # Generate alert snapshot
+                        snapshot_filename = f"{media.id}_{activity_type.replace('/', '_')}_trackNone_{int(timestamp * 1000)}.jpg"
+                        snapshot_path = os.path.join(ALERT_SNAPSHOTS_DIR, snapshot_filename)
+                        
+                        # Write the annotated keyframe
                         vis_frame = orig_frame.copy()
                         if bbox:
                             x1, y1, x2, y2 = bbox
-                            if activity_type == "sleeping":
-                                color = (255, 120, 0)  # cyan/blue in BGR
-                            elif activity_type == "walking":
-                                color = (0, 255, 0)    # green in BGR
-                            else:
-                                color = (0, 0, 255) if severity == "critical" else (0, 255, 255)
-                            
-                            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 3)
-                            label = f"{activity_type.upper()} ID {track_id}"
-                            cv2.putText(vis_frame, label, (x1, max(y1 - 10, 20)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                        else:
-                            # General alert (e.g. occupancy_overlimit)
                             color = (0, 0, 255) if severity == "critical" else (0, 255, 255)
-                            cv2.rectangle(vis_frame, (10, 10), (320, 50), (0, 0, 0), -1)
-                            cv2.putText(vis_frame, "OCCUPANCY LIMIT EXCEEDED", (15, 38),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                        
-                        # Draw ROI boundary polygon on the snapshot if config exists
+                            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 3)
+                            cv2.putText(vis_frame, f"{activity_type.upper()}", (x1, max(y1 - 10, 20)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                         if polygon_points and len(polygon_points) >= 3:
                             pts = np.array(polygon_points, dtype=np.int32)
                             cv2.polylines(vis_frame, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
-                        
+                            
                         cv2.imwrite(snapshot_path, vis_frame)
+                        
+                        # Save the alert in database
+                        await repo.create_activity_alert(
+                            tenant_id=media.tenant_id,
+                            media_id=media.id,
+                            track_id=None,
+                            activity_type=activity_type,
+                            timestamp=timestamp,
+                            bbox=bbox,
+                            snapshot_path=snapshot_path,
+                            severity=severity
+                        )
 
-                    # Save the alert in database
-                    await repo.create_activity_alert(
-                        tenant_id=media.tenant_id,
-                        media_id=media.id,
-                        track_id=track_id,
-                        activity_type=activity_type,
-                        timestamp=timestamp,
-                        bbox=bbox,
-                        snapshot_path=snapshot_path,
-                        severity=severity
-                    )
-                
+                media.output_filepath = output_filepath
                 media.status = "completed"
                 await db.commit()
 
