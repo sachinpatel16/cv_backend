@@ -1,6 +1,6 @@
 # Human Activity & Theft Detection API Documentation
 
-This module provides APIs for uploading media (photos/videos), configuring analysis settings (Region of Interest, detection rules for falling, slipping, aggression, intrusion, loitering, occupancy limits, sleeping, walking), and fetching detected alerts and summary statistics.
+This module provides APIs for uploading media (photos/videos), configuring analysis settings (Region of Interest, detection rules for falling, slipping, loitering, occupancy limits, sleeping, walking), and fetching detected alerts and summary statistics.
 
 ---
 
@@ -32,9 +32,9 @@ Every endpoint returns a unified JSON format wrapped in a standard structure:
 2. [List Activity Media (`GET /activity/media`)](#2-list-activity-media-get-activitymedia)
 3. [Get Activity Media Detail (`GET /activity/media/{media_id}`)](#3-get-activity-media-detail-get-activitymediamedia_id)
 4. [Process Activity Media (`POST /activity/media/{media_id}/process`)](#4-process-activity-media-post-activitymediamedia_idprocess)
-5. [Delete Activity Media (`DELETE /activity/media/{media_id}`)](#5-delete-activity-media-delete-activitymediamedia_id)
-6. [Get Activity Configuration (`GET /activity/config/{media_id}`)](#6-get-activity-configuration-get-activityconfigmedia_id)
-7. [Configure Activity Rules (`POST /activity/config/{media_id}`)](#7-configure-activity-rules-post-activityconfigmedia_id)
+5. [Get Process Status (`GET /activity/media/{media_id}/process`)](#5-get-process-status-get-activitymediamedia_idprocess)
+6. [Get Process History (`GET /activity/media/{media_id}/process/history`)](#6-get-process-history-get-activitymediamedia_idprocesshistory)
+7. [Delete Activity Media (`DELETE /activity/media/{media_id}`)](#7-delete-activity-media-delete-activitymediamedia_id)
 8. [Get Alerts Report (`GET /activity/report`)](#8-get-alerts-report-get-activityreport)
 9. [Get Alerts Summary (`GET /activity/report/summary`)](#9-get-alerts-summary-get-activityreportsummary)
 
@@ -160,15 +160,39 @@ Retrieves detailed information and the current processing status of a single med
 
 ### 4. Process Activity Media (`POST /activity/media/{media_id}/process`)
 
-Manually triggers frame-by-frame activity detection models on the selected media file.
+Triggers or re-triggers frame-by-frame activity detection models on the selected media file using the provided configuration payload settings.
 
 * **Method:** `POST`
 * **URL:** `/activity/media/{media_id}/process`
+* **Content-Type:** `application/json`
 
 #### Request Parameters
 | Parameter | Type | In | Description |
 | :--- | :--- | :--- | :--- |
 | `media_id` | `UUID` | Path | Unique identifier of the target media file. |
+
+#### Request Body (`ActivityProcessPayload`)
+```json
+{
+  "interval": 0.033,
+  "detect_fall": true,
+  "detect_aggression": true,
+  "detect_intrusion": true,
+  "detect_loitering": true,
+  "loitering_threshold": 15.0,
+  "detect_occupancy": true,
+  "occupancy_limit": 5,
+  "detect_sleeping": true,
+  "detect_walking": true,
+  "selected_activities": null,
+  "polygon_points": [
+    [100, 150],
+    [400, 150],
+    [450, 500],
+    [80, 500]
+  ]
+}
+```
 
 #### Response (`StandardResponse[ActivityMediaResponse]`)
 * **HTTP Status Code:** `200 OK`
@@ -176,7 +200,7 @@ Manually triggers frame-by-frame activity detection models on the selected media
   * **`id`** *(UUID)*: Unique identifier of the uploaded media source.
   * **`filename`** *(string)*: Name of the uploaded file.
   * **`media_type`** *(string)*: `"photo"` or `"video"`.
-  * **`filepath`** *(string)*: Absolute or relative server file path.
+  * **`filepath`** *(string)*: Server file path.
   * **`status`** *(string)*: Processing status (`"processing"`).
   * **`created_at`** *(string)*: Datetime in ISO 8601 format.
 
@@ -198,7 +222,101 @@ Manually triggers frame-by-frame activity detection models on the selected media
 
 ---
 
-### 5. Delete Activity Media (`DELETE /activity/media/{media_id}`)
+### 5. Get Process Status (`GET /activity/media/{media_id}/process`)
+
+Retrieves the current execution status and active configuration details of the media file process.
+
+* **Method:** `GET`
+* **URL:** `/activity/media/{media_id}/process`
+
+#### Request Parameters
+| Parameter | Type | In | Description |
+| :--- | :--- | :--- | :--- |
+| `media_id` | `UUID` | Path | Unique identifier of the target media file. |
+
+#### Response (`StandardResponse[ActivityProcessStatusResponse]`)
+* **HTTP Status Code:** `200 OK`
+* **`data`**:
+  * **`media_id`** *(UUID)*: Unique identifier of the media source.
+  * **`status`** *(string)*: Execution status (`"pending"`, `"processing"`, `"completed"`, `"failed"`).
+  * **`output_filepath`** *(string | null)*: Path to the processed output video/photo if completed.
+  * **`config`** *(object | null)*: Config options used, including polygon coordinates and active flags.
+
+#### Example Response
+```json
+{
+  "message": "Activity process status and configuration retrieved successfully.",
+  "status": 200,
+  "data": {
+    "media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
+    "status": "completed",
+    "output_filepath": "storage/activity_media/output_e4f5a6b7-89ab-cdef-0123-456789abcdef.mp4",
+    "config": {
+      "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+      "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
+      "detect_fall": true,
+      "detect_aggression": true,
+      "detect_intrusion": true,
+      "detect_loitering": true,
+      "loitering_threshold": 15.0,
+      "detect_occupancy": true,
+      "occupancy_limit": 5,
+      "detect_sleeping": true,
+      "detect_walking": true,
+      "polygon_points": [
+        [100, 150],
+        [400, 150],
+        [450, 500],
+        [80, 500]
+      ],
+      "created_at": "2026-06-22T17:46:30.987654Z"
+    }
+  }
+}
+```
+
+---
+
+### 6. Get Process History (`GET /activity/media/{media_id}/process/history`)
+
+Retrieves the history of all detected alerts generated during the media analysis process.
+
+* **Method:** `GET`
+* **URL:** `/activity/media/{media_id}/process/history`
+
+#### Request Parameters
+| Parameter | Type | In | Description |
+| :--- | :--- | :--- | :--- |
+| `media_id` | `UUID` | Path | Unique identifier of the target media file. |
+
+#### Response (`StandardResponse[List[ActivityAlertResponse]]`)
+* **HTTP Status Code:** `200 OK`
+* **`data`**: Array of alert objects detected (identical structure to the standard alerts report).
+
+#### Example Response
+```json
+{
+  "message": "Activity process history retrieved successfully.",
+  "status": 200,
+  "data": [
+    {
+      "id": "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
+      "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
+      "track_id": 14,
+      "activity_type": "loitering",
+      "timestamp": 18.42,
+      "bbox": [120, 200, 310, 480],
+      "snapshot_path": "storage/activity_alerts/e4f5a6b7-89ab-cdef-0123-456789abcdef_loitering_track14_18420.jpg",
+      "severity": "warning",
+      "created_at": "2026-06-22T17:45:15.543210Z"
+    }
+  ]
+}
+```
+
+---
+
+### 7. Delete Activity Media (`DELETE /activity/media/{media_id}`)
 
 Soft deletes an uploaded activity media file, including all its associated configurations and alert records.
 
@@ -224,139 +342,9 @@ Soft deletes an uploaded activity media file, including all its associated confi
 
 ---
 
-### 6. Get Activity Configuration (`GET /activity/config/{media_id}`)
-
-Fetches safety monitoring rules, toggles, thresholds, and ROI polygon coordinate points configured for a specific media source.
-
-* **Method:** `GET`
-* **URL:** `/activity/config/{media_id}`
-
-#### Request Parameters
-| Parameter | Type | In | Description |
-| :--- | :--- | :--- | :--- |
-| `media_id` | `UUID` | Path | Unique identifier of the target media file. |
-
-#### Response (`StandardResponse[ActivityConfigResponse]`)
-* **HTTP Status Code:** `200 OK`
-* **`data`** contains the configuration structure:
-  * **`id`** *(UUID)*: Unique configuration ID.
-  * **`activity_media_id`** *(UUID)*: ID of the corresponding media source.
-  * **`detect_fall`** *(boolean)*: Whether fall detection is active.
-  * **`detect_aggression`** *(boolean)*: Whether physical aggression detection is active.
-  * **`detect_intrusion`** *(boolean)*: Whether Region of Interest (ROI) boundary intrusion detection is active.
-  * **`detect_loitering`** *(boolean)*: Whether loitering detection is active.
-  * **`loitering_threshold`** *(float)*: Minimum duration (in seconds) someone must remain in the area to trigger a loitering alert.
-  * **`detect_occupancy`** *(boolean)*: Whether room capacity limit warning is active.
-  * **`occupancy_limit`** *(integer)*: Maximum allowed number of humans in the frame before raising a warning.
-  * **`detect_sleeping`** *(boolean)*: Whether horizontal sleeping/lying down detection is active.
-  * **`detect_walking`** *(boolean)*: Whether standing/walking posture detection is active.
-  * **`polygon_points`** *(array[array[integer]] | null)*: Coordinates of the custom Region of Interest polygon, e.g. `[[x1, y1], [x2, y2], ...]`.
-  * **`created_at`** *(string)*: Timestamp configuration was established in ISO 8601 format.
-
-#### Example Response
-```json
-{
-  "message": "Activity configuration retrieved successfully.",
-  "status": 200,
-  "data": {
-    "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-    "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
-    "detect_fall": true,
-    "detect_aggression": true,
-    "detect_intrusion": true,
-    "detect_loitering": true,
-    "loitering_threshold": 15.0,
-    "detect_occupancy": true,
-    "occupancy_limit": 5,
-    "detect_sleeping": true,
-    "detect_walking": true,
-    "polygon_points": [
-      [100, 150],
-      [400, 150],
-      [450, 500],
-      [80, 500]
-    ],
-    "created_at": "2026-06-22T17:46:30.987654Z"
-  }
-}
-```
-
----
-
-### 7. Configure Activity Rules (`POST /activity/config/{media_id}`)
-
-Updates the safety configuration rules and the Region of Interest polygon for a media source.
-Updating this config **automatically re-runs the background analysis** on the media file using the new rules.
-
-* **Method:** `POST`
-* **URL:** `/activity/config/{media_id}`
-* **Content-Type:** `application/json`
-
-#### Request Parameters
-| Parameter | Type | In | Description |
-| :--- | :--- | :--- | :--- |
-| `media_id` | `UUID` | Path | Unique identifier of the target media file. |
-
-#### Request Body (`ActivityConfigPayload`)
-```json
-{
-  "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
-  "detect_fall": true,
-  "detect_aggression": true,
-  "detect_intrusion": true,
-  "detect_loitering": true,
-  "loitering_threshold": 15.0,
-  "detect_occupancy": true,
-  "occupancy_limit": 5,
-  "detect_sleeping": true,
-  "detect_walking": true,
-  "polygon_points": [
-    [100, 150],
-    [400, 150],
-    [450, 500],
-    [80, 500]
-  ]
-}
-```
-*(All configurations default to true/threshold standards if not provided. Send `polygon_points` as `null` to clear ROI filters)*
-
-#### Response (`StandardResponse[ActivityConfigResponse]`)
-* **HTTP Status Code:** `200 OK`
-* **`data`**: Updated configuration object (see Schema 4 above).
-
-#### Example Response
-```json
-{
-  "message": "Activity rules updated and detection processing re-triggered successfully.",
-  "status": 200,
-  "data": {
-    "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
-    "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
-    "detect_fall": true,
-    "detect_aggression": true,
-    "detect_intrusion": true,
-    "detect_loitering": true,
-    "loitering_threshold": 15.0,
-    "detect_occupancy": true,
-    "occupancy_limit": 5,
-    "detect_sleeping": true,
-    "detect_walking": true,
-    "polygon_points": [
-      [100, 150],
-      [400, 150],
-      [450, 500],
-      [80, 500]
-    ],
-    "created_at": "2026-06-22T17:46:30.987654Z"
-  }
-}
-```
-
----
-
 ### 8. Get Alerts Report (`GET /activity/report`)
 
-Retrieves logged safety, intrusion, and behavior alerts. Supports filtering options.
+Retrieves logged safety, loitering, and behavior alerts. Supports filtering options.
 
 * **Method:** `GET`
 * **URL:** `/activity/report`
@@ -365,7 +353,7 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
 | Parameter | Type | In | Description |
 | :--- | :--- | :--- | :--- |
 | `media_id` | `UUID` | Query | *Optional.* Filter reports to a single uploaded media file. |
-| `activity_type` | `string` | Query | *Optional.* Filter by alert behavior: `"falling"`, `"slipping"`, `"roi_intrusion"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`, `"aggression"`. |
+| `activity_type` | `string` | Query | *Optional.* Filter by alert behavior: `"falling"`, `"slipping"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`. |
 | `severity` | `string` | Query | *Optional.* Filter by severity: `"info"`, `"warning"`, `"critical"`. |
 
 #### Response (`StandardResponse[List[ActivityAlertResponse]]`)
@@ -374,7 +362,7 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
   * **`id`** *(UUID)*: Unique identifier of the alert record.
   * **`activity_media_id`** *(UUID)*: Associated source media ID.
   * **`track_id`** *(integer | null)*: Persistent ID of the tracked target/person across frames.
-  * **`activity_type`** *(string)*: Type of violation detected (`"falling"`, `"slipping"`, `"roi_intrusion"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`, `"aggression"`).
+  * **`activity_type`** *(string)*: Type of violation detected (`"falling"`, `"slipping"`, `"loitering"`, `"occupancy_overlimit"`, `"sleeping"`, `"walking"`).
   * **`timestamp`** *(float)*: Time offset (in seconds) in the source video where the alert occurred.
   * **`bbox`** *(array[integer] | null)*: Bounding box array coordinates of the event `[x_min, y_min, x_max, y_max]`.
   * **`snapshot_path`** *(string | null)*: Relative server path to the visual snapshot frame capturing the alert.
@@ -391,10 +379,10 @@ Retrieves logged safety, intrusion, and behavior alerts. Supports filtering opti
       "id": "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
       "activity_media_id": "e4f5a6b7-89ab-cdef-0123-456789abcdef",
       "track_id": 14,
-      "activity_type": "roi_intrusion",
-      "timestamp": 8.42,
+      "activity_type": "loitering",
+      "timestamp": 18.42,
       "bbox": [120, 200, 310, 480],
-      "snapshot_path": "storage/activity_alerts/e4f5a6b7-89ab-cdef-0123-456789abcdef_roi_intrusion_track14_8420.jpg",
+      "snapshot_path": "storage/activity_alerts/e4f5a6b7-89ab-cdef-0123-456789abcdef_loitering_track14_18420.jpg",
       "severity": "warning",
       "created_at": "2026-06-22T17:45:15.543210Z"
     }
@@ -431,11 +419,9 @@ Provides aggregated totals of alerts scoped to your tenant. Useful for generatin
   "data": {
     "total_alerts": 15,
     "by_type": {
-      "roi_intrusion": 8,
       "falling": 2,
       "slipping": 0,
-      "aggression": 1,
-      "loitering": 1,
+      "loitering": 9,
       "occupancy_overlimit": 0,
       "sleeping": 2,
       "walking": 1

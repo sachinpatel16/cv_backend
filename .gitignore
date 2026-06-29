@@ -136,3 +136,7 @@ storage/
 # SQLite databases
 *.db
 *.sqlite
+
+# Large Model Files
+*.pb
+models/activity/frozen_inference_graph.pb

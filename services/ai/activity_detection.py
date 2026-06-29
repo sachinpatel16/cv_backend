@@ -57,12 +57,221 @@ class OccupancyTracker:
 class ActivityDetectionService:
     def __init__(self):
         self.model = None
+        # TF AVA Model attributes
+        self.tf_graph = None
+        self.tf_sess = None
+        self.tf_labels = []
+        self.tf_input_tensor = None
+        self.tf_output_tensors = {}
 
     def _lazy_init(self):
         if self.model is None:
             # Loads yolov8n-pose.pt (will auto-download if missing)
             self.model = YOLO("yolov26n-pose.pt")
             # self.model = YOLO("yolov26n-pose.pt")
+
+    def _lazy_init_tf(self):
+        if self.tf_sess is None:
+            # Self-healing copy: Ensure model and labels exist
+            dest_dir = os.path.join("models", "activity")
+            os.makedirs(dest_dir, exist_ok=True)
+            
+            graph_path = os.path.join(dest_dir, "frozen_inference_graph.pb")
+            labels_path = os.path.join(dest_dir, "labels.txt")
+            
+            src_dir = os.path.join("..", "human-activity-detection")
+            src_graph = os.path.join(src_dir, "frozen_inference_graph.pb")
+            src_labels = os.path.join(src_dir, "labels.txt")
+            
+            import shutil
+            if not os.path.exists(graph_path) and os.path.exists(src_graph):
+                print(f"Self-healing copy: copying {src_graph} -> {graph_path}")
+                shutil.copy2(src_graph, graph_path)
+            if not os.path.exists(labels_path) and os.path.exists(src_labels):
+                print(f"Self-healing copy: copying {src_labels} -> {labels_path}")
+                shutil.copy2(src_labels, labels_path)
+                
+            if not os.path.exists(graph_path) or not os.path.exists(labels_path):
+                raise FileNotFoundError(
+                    f"Model assets not found at {graph_path} or {labels_path} and source directory is missing."
+                )
+                
+            # Read labels
+            with open(labels_path, 'r') as f:
+                self.tf_labels = [line.strip() for line in f.readlines()]
+                
+            import tensorflow.compat.v1 as tf
+            tf.disable_v2_behavior()
+            
+            self.tf_graph = tf.Graph()
+            with self.tf_graph.as_default():
+                graph_def = tf.GraphDef()
+                with tf.gfile.GFile(graph_path, 'rb') as f:
+                    serialized_graph = f.read()
+                    graph_def.ParseFromString(serialized_graph)
+                    tf.import_graph_def(graph_def, name='')
+                    
+                self.tf_sess = tf.Session(graph=self.tf_graph)
+                
+                ops = self.tf_graph.get_operations()
+                all_tensor_names = {output.name for op in ops for output in op.outputs}
+                
+                for key in ['num_detections', 'detection_boxes', 'detection_scores', 'detection_classes']:
+                    tensor_name = key + ':0'
+                    if tensor_name in all_tensor_names:
+                        self.tf_output_tensors[key] = self.tf_graph.get_tensor_by_name(tensor_name)
+                        
+                self.tf_input_tensor = self.tf_graph.get_tensor_by_name('image_tensor:0')
+
+    def process_video_tf(
+        self,
+        video_path: str,
+        output_video_path: Optional[str] = None,
+        polygon_points: Optional[List[List[int]]] = None,
+        selected_activities: Optional[List[str]] = None,
+        detect_fall: bool = True,
+        detect_sleeping: bool = True,
+        detect_walking: bool = True,
+        interval: float = 0.1,
+        threshold: float = 0.5
+    ) -> Generator[dict, None, None]:
+        self._lazy_init_tf()
+        
+        # Determine target activities
+        target_labels = None
+        if selected_activities and len(selected_activities) > 0:
+            target_labels = {lbl.lower().strip() for lbl in selected_activities}
+        else:
+            # Build target list from legacy flags
+            target_labels = set()
+            if detect_fall:
+                target_labels.add("fall down")
+                target_labels.add("get up")
+            if detect_sleeping:
+                target_labels.add("lie/sleep")
+            if detect_walking:
+                target_labels.add("walk")
+                target_labels.add("run/jog")
+                target_labels.add("stand")
+                target_labels.add("crouch/kneel")
+                target_labels.add("bend/bow (at the waist)")
+                
+            # If no target set, use all classes except default exclusions
+            if not target_labels:
+                exclusions = {1, 3, 17, 37, 43, 45, 46, 47, 59, 65, 74, 77, 78, 79, 80}
+                target_labels = {
+                    self.tf_labels[idx].lower().strip()
+                    for idx in range(len(self.tf_labels))
+                    if (idx + 1) not in exclusions and self.tf_labels[idx] != "N/A"
+                }
+
+        # Parse polygon ROI points once
+        polygon_np = None
+        if polygon_points and len(polygon_points) >= 3:
+            polygon_np = np.array(polygon_points, dtype=np.int32)
+
+        # Set up VideoWriter if needed
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+
+        writer = None
+        if output_video_path:
+            os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            # Adjust output video FPS based on frame extraction interval
+            output_fps = max(1, int(1.0 / interval)) if interval > 0 else int(fps)
+            writer = cv2.VideoWriter(output_video_path, fourcc, output_fps, (width, height))
+
+        colors = np.random.uniform(0, 255, size=(len(self.tf_labels) + 1, 3))
+        
+        extractor = VideoFrameExtractor(video_path, interval_seconds=interval)
+        try:
+            for frame_small, frame, sec, scale in extractor.extract_frames():
+                h_orig, w_orig = frame.shape[:2]
+                
+                # Expand dims for batching
+                frame_exp = np.expand_dims(frame_small, axis=0)
+                
+                # Run TF inference
+                output_dict = self.tf_sess.run(
+                    self.tf_output_tensors,
+                    feed_dict={self.tf_input_tensor: frame_exp}
+                )
+                
+                num_detections = int(output_dict['num_detections'][0])
+                detection_classes = output_dict['detection_classes'][0].astype(np.uint8)
+                detection_boxes = output_dict['detection_boxes'][0]
+                detection_scores = output_dict['detection_scores'][0]
+                
+                frame_annotated = frame.copy()
+                
+                # Draw ROI polygon boundary on the output frame if config exists
+                if polygon_np is not None:
+                    cv2.polylines(frame_annotated, [polygon_np], isClosed=True, color=(0, 255, 0), thickness=2)
+                
+                for i in range(num_detections):
+                    score = float(detection_scores[i])
+                    if score < threshold:
+                        continue
+                        
+                    class_idx = int(detection_classes[i]) - 1
+                    if class_idx < 0 or class_idx >= len(self.tf_labels):
+                        continue
+                        
+                    label = self.tf_labels[class_idx]
+                    label_clean = label.lower().strip()
+                    
+                    if label == "N/A" or label_clean not in target_labels:
+                        continue
+                        
+                    bbox_norm = detection_boxes[i]
+                    ymin = int(bbox_norm[0] * h_orig)
+                    xmin = int(bbox_norm[1] * w_orig)
+                    ymax = int(bbox_norm[2] * h_orig)
+                    xmax = int(bbox_norm[3] * w_orig)
+                    
+                    # ROI intrusion filtering
+                    center_x = (xmin + xmax) // 2
+                    center_y = (ymin + ymax) // 2
+                    if polygon_np is not None:
+                        is_inside = cv2.pointPolygonTest(polygon_np, (float(center_x), float(center_y)), False) >= 0
+                        if not is_inside:
+                            continue
+                            
+                    # Determine severity based on label
+                    severity = "info"
+                    if label_clean in ["fall down", "fight/hit (a person)", "push (another person)", "grab (a person)"]:
+                        severity = "critical"
+                    elif label_clean in ["run/jog", "crouch/kneel", "get up", "jump/leap"]:
+                        severity = "warning"
+                        
+                    # Annotate frame
+                    color = colors[class_idx + 1]
+                    cv2.rectangle(frame_annotated, (xmin, ymin), (xmax, ymax), color, 2)
+                    text = f"{label} ({score:.2f})"
+                    cv2.putText(frame_annotated, text, (xmin, max(ymin - 10, 20)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                                
+                    yield {
+                        "track_id": None,
+                        "activity_type": label,
+                        "timestamp": sec,
+                        "bbox": [xmin, ymin, xmax, ymax],
+                        "severity": severity,
+                        "frame": frame
+                    }
+                    
+                if writer is not None:
+                    writer.write(frame_annotated)
+        finally:
+            if writer is not None:
+                writer.release()
+
 
     def inside_polygon(self, point: Tuple[int, int], polygon: np.ndarray) -> bool:
         """Checks if a point (x, y) is inside the polygon."""
@@ -355,19 +564,6 @@ class ActivityDetectionService:
                                 "frame": frame
                             }
 
-                # Intrusion alert
-                if detect_intrusion and det["is_intruded"]:
-                    if sec - hist["last_intrusion_alert"] >= 5.0:
-                        hist["last_intrusion_alert"] = sec
-                        yield {
-                            "track_id": t_id,
-                            "activity_type": "roi_intrusion",
-                            "timestamp": sec,
-                            "bbox": det["bbox"],
-                            "severity": "warning",
-                            "frame": frame
-                        }
-
                 # Loitering alert
                 if detect_loitering:
                     # Person needs to be inside the ROI boundary to accumulate loitering duration
@@ -411,53 +607,6 @@ class ActivityDetectionService:
                             "severity": "info",
                             "frame": frame
                         }
-
-            # Aggression detection (pairs check)
-            if detect_aggression and len(current_detections) >= 2:
-                for i in range(len(current_detections)):
-                    for j in range(i + 1, len(current_detections)):
-                        d1 = current_detections[i]
-                        d2 = current_detections[j]
-                        
-                        b1 = d1["bbox"]
-                        b2 = d2["bbox"]
-                        
-                        c1 = d1["center"]
-                        c2 = d2["center"]
-                        dist = np.sqrt((c1[0] - c2[0])**2 + (c1[1] - c2[1])**2)
-                        
-                        overlap = not (b1[2] < b2[0] or b2[2] < b1[0] or b1[3] < b2[1] or b2[3] < b1[1])
-                        avg_size = ((b1[2] - b1[0] + b1[3] - b1[1]) + (b2[2] - b2[0] + b2[3] - b2[1])) / 4.0
-                        
-                        if dist < (avg_size * 2.2) or overlap:
-                            h1 = person_history[d1["track_id"]]
-                            h2 = person_history[d2["track_id"]]
-                            
-                            agg1 = False
-                            agg2 = False
-                            for key in ["rel_wrist_l", "rel_wrist_r", "rel_elbow_l", "rel_elbow_r"]:
-                                if len(h1[key]) >= 3:
-                                    spd = np.linalg.norm(h1[key][-1] - h1[key][-3])
-                                    if (spd / avg_size) > 0.20:
-                                        agg1 = True
-                                if len(h2[key]) >= 3:
-                                    spd = np.linalg.norm(h2[key][-1] - h2[key][-3])
-                                    if (spd / avg_size) > 0.20:
-                                        agg2 = True
-                                        
-                            if agg1 or agg2:
-                                # Trigger aggression alert with 5s cooldown for both
-                                if (sec - h1["last_aggression_alert"] >= 5.0) and (sec - h2["last_aggression_alert"] >= 5.0):
-                                    h1["last_aggression_alert"] = sec
-                                    h2["last_aggression_alert"] = sec
-                                    yield {
-                                        "track_id": d1["track_id"],
-                                        "activity_type": "aggression",
-                                        "timestamp": sec,
-                                        "bbox": d1["bbox"],
-                                        "severity": "critical",
-                                        "frame": frame
-                                    }
 
             # Occupancy Limit Alert (Run at the end of the frame)
             if detect_occupancy:
