@@ -31,3 +31,4 @@ ultralytics==8.4.60
 supervision>=0.18.0
 scipy>=1.10.0
 pyyaml>=6.0
+tensorflow>=2.15.0

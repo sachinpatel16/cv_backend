@@ -11,7 +11,8 @@ from modules.activity.service import ActivityService
 from modules.activity.schema import (
     ActivityMediaResponse,
     ActivityConfigResponse,
-    ActivityConfigPayload,
+    ActivityProcessPayload,
+    ActivityProcessStatusResponse,
     ActivityAlertResponse,
     ActivityAlertSummary
 )
@@ -113,8 +114,6 @@ async def get_activity_media_detail(
         status=status.HTTP_200_OK,
         data=ActivityMediaResponse.model_validate(media)
     )
-
-
 @router.post(
     "/media/{media_id}/process",
     response_model=StandardResponse[ActivityMediaResponse],
@@ -122,19 +121,69 @@ async def get_activity_media_detail(
 )
 async def process_activity_media(
     media_id: uuid.UUID,
+    payload: ActivityProcessPayload,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Manually triggers frame-by-frame activity detection models on the selected media file.
+    Triggers/re-triggers frame-by-frame activity detection models on the selected media file
+    using the provided configuration settings.
     """
     tenant_id = verify_tenant(current_user)
     service = ActivityService(db)
-    media = await service.process_activity_media(media_id, tenant_id)
+    media = await service.process_activity_media(media_id, tenant_id, payload)
     return StandardResponse(
         message="Activity detection tracking started successfully.",
         status=status.HTTP_200_OK,
         data=ActivityMediaResponse.model_validate(media)
+    )
+
+
+@router.get(
+    "/media/{media_id}/process",
+    response_model=StandardResponse[ActivityProcessStatusResponse],
+    status_code=status.HTTP_200_OK
+)
+async def get_process_status(
+    media_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves the current execution status and active configuration details of the media file process.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = ActivityService(db)
+    status_dict = await service.get_process_status(media_id, tenant_id)
+    return StandardResponse(
+        message="Activity process status and configuration retrieved successfully.",
+        status=status.HTTP_200_OK,
+        data=ActivityProcessStatusResponse.model_validate(status_dict)
+    )
+
+
+@router.get(
+    "/media/{media_id}/process/history",
+    response_model=StandardResponse[List[ActivityAlertResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def get_process_history(
+    media_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves the history of all detected alerts/violations generated during the media analysis process.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = ActivityService(db)
+    history = await service.get_process_history(media_id, tenant_id)
+    
+    history_data = [ActivityAlertResponse.model_validate(h) for h in history]
+    return StandardResponse(
+        message="Activity process history retrieved successfully.",
+        status=status.HTTP_200_OK,
+        data=history_data
     )
 
 
@@ -160,59 +209,6 @@ async def delete_activity_media(
         status=status.HTTP_200_OK,
         data=None
     )
-
-
-@router.get(
-    "/config/{media_id}",
-    response_model=StandardResponse[ActivityConfigResponse],
-    status_code=status.HTTP_200_OK
-)
-async def get_activity_config(
-    media_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Fetches the active safety monitoring toggles and ROI polygon boundary coordinates for a media source.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = ActivityService(db)
-    config = await service.get_config(media_id, tenant_id)
-    
-    return StandardResponse(
-        message="Activity configuration retrieved successfully.",
-        status=status.HTTP_200_OK,
-        data=ActivityConfigResponse.model_validate(config)
-    )
-
-
-@router.post(
-    "/config/{media_id}",
-    response_model=StandardResponse[ActivityConfigResponse],
-    status_code=status.HTTP_200_OK
-)
-async def configure_activity_rules(
-    media_id: uuid.UUID,
-    payload: ActivityConfigPayload,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Updates the safety configuration rules (fall, aggression, intrusion flags) and coordinates
-    representing the polygon Region of Interest boundary. 
-    This automatically triggers a fresh background Celery analysis with the new configuration.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = ActivityService(db)
-    config = await service.configure_activity(media_id, tenant_id, payload)
-    
-    return StandardResponse(
-        message="Activity rules updated and detection processing re-triggered successfully.",
-        status=status.HTTP_200_OK,
-        data=ActivityConfigResponse.model_validate(config)
-    )
-
-
 @router.get(
     "/report",
     response_model=StandardResponse[List[ActivityAlertResponse]],

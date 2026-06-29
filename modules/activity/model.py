@@ -15,6 +15,7 @@ class ActivityMedia(BaseModel):
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     filepath: Mapped[str] = mapped_column(String(512), nullable=False)  # Path in local storage
+    output_filepath: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)  # Processed output path
     media_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'photo' | 'video'
     status: Mapped[str] = mapped_column(String(20), default="pending")    # 'pending' | 'processing' | 'completed' | 'failed'
 
@@ -47,6 +48,9 @@ class ActivityConfig(BaseModel):
 
     detect_sleeping: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     detect_walking: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    # Selected custom activity labels to track
+    selected_activities: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
 
     activity_media: Mapped["ActivityMedia"] = relationship(back_populates="configs")
 

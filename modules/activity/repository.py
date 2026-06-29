@@ -100,7 +100,8 @@ class ActivityRepository:
         detect_fall: bool, detect_aggression: bool, detect_intrusion: bool,
         detect_loitering: bool, loitering_threshold: float,
         detect_occupancy: bool, occupancy_limit: int,
-        detect_sleeping: bool, detect_walking: bool
+        detect_sleeping: bool, detect_walking: bool,
+        selected_activities: Optional[List[str]] = None
     ) -> ActivityConfig:
         """Create or update ROI/detection configurations for a media source."""
         config = await self.get_activity_config(media_id, tenant_id)
@@ -117,7 +118,8 @@ class ActivityRepository:
                 detect_occupancy=detect_occupancy,
                 occupancy_limit=occupancy_limit,
                 detect_sleeping=detect_sleeping,
-                detect_walking=detect_walking
+                detect_walking=detect_walking,
+                selected_activities=selected_activities
             )
             self.db.add(config)
         else:
@@ -131,6 +133,7 @@ class ActivityRepository:
             config.occupancy_limit = occupancy_limit
             config.detect_sleeping = detect_sleeping
             config.detect_walking = detect_walking
+            config.selected_activities = selected_activities
         await self.db.flush()
         return config
 
