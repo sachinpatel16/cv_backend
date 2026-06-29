@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import List, Tuple, Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,20 +159,21 @@ class EmployeeRepository:
         first_seen_sec: float = 0.0,
         last_seen_sec: float = 0.0,
         occurrence_increment: int = 1,
-        detection_time: Optional[object] = None
+        entry_time: Optional[datetime] = None,
+        exit_time: Optional[datetime] = None
     ) -> EmployeeAttendanceLog:
         """
         Registers or updates an employee attendance record for a calendar day (day-wise).
         """
         from datetime import datetime, time, timezone
-        if detection_time is None:
-            detection_time = datetime.now(timezone.utc)
-        elif detection_time.tzinfo is None:
-            detection_time = detection_time.replace(tzinfo=timezone.utc)
+        if entry_time is None:
+            entry_time = datetime.now(timezone.utc)
+        if exit_time is None:
+            exit_time = entry_time
 
         # Get calendar day boundaries in UTC
-        start_of_day = datetime.combine(detection_time.date(), time.min, tzinfo=timezone.utc)
-        end_of_day = datetime.combine(detection_time.date(), time.max, tzinfo=timezone.utc)
+        start_of_day = datetime.combine(entry_time.date(), time.min, tzinfo=timezone.utc)
+        end_of_day = datetime.combine(entry_time.date(), time.max, tzinfo=timezone.utc)
 
         stmt = select(EmployeeAttendanceLog).where(
             EmployeeAttendanceLog.employee_id == employee_id,
@@ -191,10 +193,10 @@ class EmployeeRepository:
                 log.last_seen = last_seen_sec
 
             # Update entry/exit timestamps
-            if detection_time < log.employee_entry_timestamp:
-                log.employee_entry_timestamp = detection_time
-            if detection_time > log.employee_exit_timestamp:
-                log.employee_exit_timestamp = detection_time
+            if entry_time < log.employee_entry_timestamp:
+                log.employee_entry_timestamp = entry_time
+            if exit_time > log.employee_exit_timestamp:
+                log.employee_exit_timestamp = exit_time
 
             if session_id and not log.session_id:
                 log.session_id = session_id
@@ -209,8 +211,8 @@ class EmployeeRepository:
                 first_seen=first_seen_sec,
                 last_seen=last_seen_sec,
                 occurrence_count=occurrence_increment,
-                employee_entry_timestamp=detection_time,
-                employee_exit_timestamp=detection_time
+                employee_entry_timestamp=entry_time,
+                employee_exit_timestamp=exit_time
             )
             self.db.add(log)
             await self.db.flush()
@@ -230,11 +232,31 @@ class EmployeeRepository:
         await self.db.flush()
         return uv
 
-    async def get_uploaded_videos(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> list:
+    async def get_uploaded_video_by_name(self, tenant_id: uuid.UUID, original_name: str) -> Optional[object]:
         from modules.peopleanalytics.model import UploadedVideo
         stmt = select(UploadedVideo).where(
             UploadedVideo.tenant_id == tenant_id,
-            UploadedVideo.user_id == user_id,
+            UploadedVideo.original_name == original_name,
+            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
+            UploadedVideo.is_delete == False
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
+    async def get_uploaded_video_by_path(self, tenant_id: uuid.UUID, saved_path: str) -> Optional[object]:
+        from modules.peopleanalytics.model import UploadedVideo
+        stmt = select(UploadedVideo).where(
+            UploadedVideo.tenant_id == tenant_id,
+            UploadedVideo.saved_path == saved_path,
+            UploadedVideo.is_delete == False
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
+    async def get_uploaded_videos(self, tenant_id: uuid.UUID) -> list:
+        from modules.peopleanalytics.model import UploadedVideo
+        stmt = select(UploadedVideo).where(
+            UploadedVideo.tenant_id == tenant_id,
             UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
             UploadedVideo.is_delete == False
         ).order_by(UploadedVideo.created_at.desc())

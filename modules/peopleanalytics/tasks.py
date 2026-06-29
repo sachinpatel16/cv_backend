@@ -1,6 +1,7 @@
 import os
 import uuid
 import cv2
+from datetime import datetime, timezone, timedelta
 # Prevent OpenCV multi-threading conflicts with Celery fork
 cv2.setNumThreads(0)
 
@@ -9,7 +10,7 @@ import torch
 torch.set_num_threads(1)
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from collections import defaultdict
 from ultralytics import YOLO
 import supervision as sv
@@ -17,10 +18,13 @@ import supervision as sv
 from workers.celery import celery_app
 from database.session import SessionLocal
 from workers.utils import run_async
-from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity
+from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonIdentity, PersonEmbedding
 from modules.employees.model import Employee
 from modules.peopleanalytics.repository import PeopleAnalyticsRepository
-from services.ai.people_analytics import ReIDFeatureExtractor, LineCrossingCounter
+from services.ai.people_analytics import LineCrossingCounter
+from services.ai.face_recognition import face_rec_service
+from services.ai.math_utils import map_similarity_threshold, find_best_match_in_cache, is_face_occluded
+from modules.employees.cache import get_cached_employee_embeddings
 
 ANALYTICS_OUTPUTS_DIR = os.path.join("storage", "people_analytics_outputs")
 os.makedirs(ANALYTICS_OUTPUTS_DIR, exist_ok=True)
@@ -67,17 +71,24 @@ def process_people_analytics_task(
                 file_ext = os.path.splitext(filepath)[1].lower()
                 is_image = file_ext in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
 
+                # Initialize Redis client if needed
+                from database.redis import get_redis_client, init_redis
+                if get_redis_client() is None:
+                    await init_redis()
+                # Load employee embeddings from cache (or DB)
+                employee_cache = await get_cached_employee_embeddings(db, session.tenant_id)
+
                 # Instantiate visual tools
-                extractor = ReIDFeatureExtractor()
-                model = YOLO("models/yolo12m.pt")
+                from configs.base import settings
+                model = YOLO(settings.YOLO_MODEL)
 
                 if is_image:
                     await _process_image_job(
-                        db, repo, session, filepath, model, extractor, similarity_threshold, confidence_threshold, user_id_str
+                        db, repo, session, filepath, model, employee_cache, similarity_threshold, confidence_threshold, user_id_str
                     )
                 else:
                     await _process_video_job(
-                        db, repo, session, filepath, model, extractor, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str
+                        db, repo, session, filepath, model, employee_cache, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str
                     )
 
             except Exception as e:
@@ -90,7 +101,7 @@ def process_people_analytics_task(
 
 
 async def _process_image_job(
-    db, repo, session, filepath, model, extractor, similarity_threshold, confidence_threshold, user_id_str=None
+    db, repo, session, filepath, model, employee_cache, similarity_threshold, confidence_threshold, user_id_str=None
 ):
     # Process static image
     img = cv2.imread(filepath)
@@ -109,68 +120,140 @@ async def _process_image_job(
 
     # Dictionary to keep unique tracked identities in this image
     seen_identities = set()
-
     for idx, box in enumerate(boxes):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         # Validate coordinates
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w_orig, x2), min(h_orig, y2)
 
+        # Find matching face inside the localized person crop
+        matched_face = None
         crop = img[y1:y2, x1:x2]
-        embedding = extractor.get_embedding(crop)
-        if embedding is None:
-            continue
+        if crop is not None and crop.size > 0:
+            _, encoded_crop = cv2.imencode(".jpg", crop)
+            crop_bytes = encoded_crop.tobytes()
+            try:
+                faces = face_rec_service.extract_faces(crop_bytes)
+            except Exception:
+                faces = []
 
-        # Search visitors (specifically class_id=0 for body ReID)
-        match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
-        if match_vis:
-            visitor, sim = match_vis
-            crop_path = None
-            if crop is not None and crop.size > 0:
-                crop_filename = f"{uuid.uuid4()}.jpg"
-                user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
-                os.makedirs(user_crops_dir, exist_ok=True)
-                crop_path = os.path.join(user_crops_dir, crop_filename)
-                cv2.imwrite(crop_path, crop)
+            # Apply the 4 face visibility/quality filters
+            valid_faces = []
+            for face in faces:
+                fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                # 1. Size filter
+                if (fx2 - fx1) < 45 or (fy2 - fy1) < 45:
+                    continue
+                # 2. Confidence filter
+                if face.get("det_score", 0.0) < 0.70:
+                    continue
+                # 3. Keypoints containment filter
+                kps = face.get("kps")
+                is_full_face = True
+                if kps:
+                    margin_x = int((fx2 - fx1) * 0.05)
+                    margin_y = int((fy2 - fy1) * 0.05)
+                    limit_x1 = fx1 - margin_x
+                    limit_x2 = fx2 + margin_x
+                    limit_y1 = fy1 - margin_y
+                    limit_y2 = fy2 + margin_y
+                    for kp in kps:
+                        kp_x, kp_y = kp
+                        if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
+                            is_full_face = False
+                            break
+                if not is_full_face:
+                    continue
+                # 4. Occlusion filter
+                if is_face_occluded(crop, kps):
+                    continue
+                valid_faces.append(face)
 
-            await repo.create_person_occurrence(
-                session_id=session.id,
-                identity_id=visitor.id,
-                tracker_id=idx,
-                first_seen=0.0,
-                last_seen=0.0,
-                crop_path=crop_path
-            )
-            # Keep database updated with new profile details
-            await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
-            seen_identities.add(f"visitor:{visitor.id}")
-            label = f"Visitor #{str(visitor.id)[:4]}"
-            color = (0, 180, 255) # Orange for returning visitors
-        else:
-            # Create a new unique identity
-            visitor = await repo.create_person_identity(session.tenant_id)
-            await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=0.0)
-            crop_path = None
-            if crop is not None and crop.size > 0:
-                crop_filename = f"{uuid.uuid4()}.jpg"
-                user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
-                os.makedirs(user_crops_dir, exist_ok=True)
-                crop_path = os.path.join(user_crops_dir, crop_filename)
-                cv2.imwrite(crop_path, crop)
+            if valid_faces:
+                matched_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
 
-            await repo.create_person_occurrence(
-                session_id=session.id,
-                identity_id=visitor.id,
-                tracker_id=idx,
-                first_seen=0.0,
-                last_seen=0.0,
-                crop_path=crop_path
-            )
-            first_time_visitor_count += 1
-            seen_identities.add(f"visitor:{visitor.id}")
-            label = "New Visitor"
-            color = (0, 0, 255) # Red for new visitors
+        identity_id = None
+        label = "Visitor"
+        color = (200, 200, 200) # Gray for face-less/anonymous visitors
 
+        if matched_face is not None:
+            face_embedding = np.array(matched_face["embedding"], dtype=np.float32)
+            mapped_threshold = map_similarity_threshold(similarity_threshold)
+
+            # 1. Check Employees cache
+            match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+            if match_emp:
+                employee, sim = match_emp
+                identity_id = employee.id
+                label = f"{employee.first_name} (EMP)"
+                color = (0, 255, 0)
+                seen_identities.add(f"employee:{employee.id}")
+                
+                # Log employee attendance
+                await repo.create_employee_attendance(
+                    session_id=session.id,
+                    employee_id=employee.id,
+                    first_seen=0.0,
+                    last_seen=0.0,
+                    occurrence_count=1
+                )
+            else:
+                # 2. Check Face Visitors (class_id=1)
+                match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
+                if match_vis:
+                    visitor, sim = match_vis
+                    identity_id = visitor.id
+                    label = f"Visitor #{str(visitor.id)[:4]}"
+                    color = (0, 180, 255)
+                    seen_identities.add(f"visitor:{visitor.id}")
+                    await repo.create_person_embedding(
+                        identity_id=visitor.id,
+                        embedding=face_embedding.tolist(),
+                        bbox=matched_face["bbox"],
+                        timestamp=0.0
+                    )
+                else:
+                    # 3. Create new Face Visitor
+                    visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                    await repo.create_person_embedding(
+                        identity_id=visitor.id,
+                        embedding=face_embedding.tolist(),
+                        bbox=matched_face["bbox"],
+                        timestamp=0.0
+                    )
+                    identity_id = visitor.id
+                    label = "New Visitor"
+                    color = (0, 0, 255)
+                    seen_identities.add(f"visitor:{visitor.id}")
+                    first_time_visitor_count += 1
+
+                # Log visitor occurrence
+                crop_path = None
+                crop_img = img[y1:y2, x1:x2]
+                if crop_img is not None and crop_img.size > 0:
+                    crop_filename = f"{uuid.uuid4()}.jpg"
+                    user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
+                    os.makedirs(user_crops_dir, exist_ok=True)
+                    crop_path = os.path.join(user_crops_dir, crop_filename)
+                    cv2.imwrite(crop_path, crop_img)
+
+                await repo.create_person_occurrence(
+                    session_id=session.id,
+                    identity_id=visitor.id,
+                    tracker_id=idx,
+                    first_seen=0.0,
+                    last_seen=0.0,
+                    crop_path=crop_path
+                )
+                # Log visitor daily attendance
+                await repo.log_visitor_attendance(
+                    session_id=session.id,
+                    identity_id=visitor.id,
+                    first_seen_sec=0.0,
+                    last_seen_sec=0.0,
+                    occurrence_increment=1
+                )
+        
         # Draw overlays
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
         cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
@@ -217,7 +300,7 @@ async def _process_image_job(
 
 
 async def _process_video_job(
-    db, repo, session, filepath, model, extractor, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str=None
+    db, repo, session, filepath, model, employee_cache, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str=None
 ):
     cap = cv2.VideoCapture(filepath)
     if not cap.isOpened():
@@ -237,7 +320,10 @@ async def _process_video_job(
     output_writer = cv2.VideoWriter(output_path, fourcc, fps, (orig_width, orig_height))
 
     # Initialize tracker and line crossing
-    tracker = sv.ByteTrack()
+    tracker = sv.ByteTrack(
+        frame_rate=int(fps),
+        lost_track_buffer=int(fps * 10)  # Keep lost tracks in memory for up to 10 seconds (aligns with employee module)
+    )
     line_counter = None
     if line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
         line_counter = LineCrossingCounter(line_start, line_end)
@@ -249,6 +335,7 @@ async def _process_video_job(
     # Store complete session records for bulk inserts at the end
     completed_occurrences = []  # List of dicts
     completed_attendance = []   # List of dicts
+    completed_visitor_attendance = [] # List of dicts
     completed_crossings = []    # List of dicts
     track_crossings = []        # Temp list of all raw crossing events
 
@@ -259,6 +346,7 @@ async def _process_video_job(
     exit_count = None
     peak_occupancy_so_far = 0
 
+    frame_step = max(1, int(fps / 5))  # Process face recognition 5 times per second
     frame_idx = 0
     
     while cap.isOpened():
@@ -294,11 +382,14 @@ async def _process_video_job(
                 # If this is a brand new track
                 if tracker_id not in active_tracks:
                     crop = frame[y1:y2, x1:x2]
+                    now_ts = datetime.now(timezone.utc)
                     active_tracks[tracker_id] = {
                         "type": "visitor",
                         "id": None,
                         "first_seen": timestamp_sec,
                         "last_seen": timestamp_sec,
+                        "first_seen_timestamp": now_ts,
+                        "last_seen_timestamp": now_ts,
                         "occurrences": 1,
                         "label": f"Track #{tracker_id}",
                         "color": (200, 200, 200),
@@ -312,6 +403,7 @@ async def _process_video_job(
                     # Update last seen timestamp and best crop info
                     track_info = active_tracks[tracker_id]
                     track_info["last_seen"] = timestamp_sec
+                    track_info["last_seen_timestamp"] = datetime.now(timezone.utc)
                     track_info["frames_since_start"] += 1
 
                     crop = frame[y1:y2, x1:x2]
@@ -322,36 +414,118 @@ async def _process_video_job(
                             track_info["best_crop"] = crop
 
                 track_info = active_tracks[tracker_id]
-                # Match once the track reaches 10 frames of history
-                if not track_info["matched"] and track_info["frames_since_start"] >= 10:
-                    best_crop = track_info["best_crop"]
-                    if best_crop is not None:
-                        embedding = extractor.get_embedding(best_crop)
-                        if embedding is not None:
-                            # Match against generic visitors (specifically class_id=0 for body ReID)
-                            match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold, class_id=0)
+                
+                # Check for face inside the localized person crop
+                matched_face = None
+                # Run face detection periodically if the track is not an employee (unmatched or currently visitor)
+                if (not track_info["matched"] or track_info["type"] == "visitor") and frame_idx % frame_step == 0:
+                    crop = frame[y1:y2, x1:x2]
+                    if crop is not None and crop.size > 0:
+                        _, encoded_img = cv2.imencode(".jpg", crop)
+                        crop_bytes = encoded_img.tobytes()
+                        try:
+                            faces = face_rec_service.extract_faces(crop_bytes)
+                        except Exception:
+                            faces = []
+
+                        # Apply the 4 face visibility/quality filters
+                        valid_faces = []
+                        for face in faces:
+                            fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                            # 1. Size filter
+                            if (fx2 - fx1) < 45 or (fy2 - fy1) < 45:
+                                continue
+                            # 2. Confidence filter
+                            if face.get("det_score", 0.0) < 0.70:
+                                continue
+                            # 3. Keypoints containment filter
+                            kps = face.get("kps")
+                            is_full_face = True
+                            if kps:
+                                margin_x = int((fx2 - fx1) * 0.05)
+                                margin_y = int((fy2 - fy1) * 0.05)
+                                limit_x1 = fx1 - margin_x
+                                limit_x2 = fx2 + margin_x
+                                limit_y1 = fy1 - margin_y
+                                limit_y2 = fy2 + margin_y
+                                for kp in kps:
+                                    kp_x, kp_y = kp
+                                    if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
+                                        is_full_face = False
+                                        break
+                            if not is_full_face:
+                                continue
+                            # 4. Occlusion filter
+                            if is_face_occluded(crop, kps):
+                                continue
+                            valid_faces.append(face)
+
+                        if valid_faces:
+                            # Take the largest face detected in the crop
+                            matched_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+
+                # Match if a face was detected inside the person's bounding box and they aren't fully employee-matched yet
+                if (not track_info["matched"] or track_info["type"] == "visitor") and matched_face is not None:
+                    face_embedding = np.array(matched_face["embedding"], dtype=np.float32)
+                    mapped_threshold = map_similarity_threshold(similarity_threshold)
+
+                    # 1. Match against registered employees
+                    match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+                    if match_emp:
+                        employee, sim = match_emp
+                        
+                        # UPGRADE: If they were previously matched as a visitor, clean it up!
+                        if track_info["type"] == "visitor" and track_info["id"] is not None:
+                            old_visitor_id = track_info["id"]
+                            unique_seen_identities.discard(f"visitor:{old_visitor_id}")
+                            
+                            if track_info.get("is_new_visitor"):
+                                first_time_visitors_count = max(0, first_time_visitors_count - 1)
+                                track_info["is_new_visitor"] = False
+                            
+                            try:
+                                await db.execute(delete(PersonEmbedding).where(PersonEmbedding.identity_id == old_visitor_id))
+                                await db.execute(delete(PersonIdentity).where(PersonIdentity.id == old_visitor_id))
+                                await db.commit()
+                            except Exception as db_err:
+                                print(f"Error cleaning up upgraded visitor: {db_err}")
+                        
+                        track_info.update({
+                            "type": "employee",
+                            "id": employee.id,
+                            "label": f"{employee.first_name} (EMP)",
+                            "color": (0, 255, 0),
+                            "matched": True
+                        })
+                        unique_seen_identities.add(f"employee:{employee.id}")
+                    else:
+                        # 2. Match against generic visitors (class_id=1 for face ReID)
+                        # ONLY if they don't already have a visitor ID associated!
+                        if track_info["type"] == "visitor" and track_info["id"] is not None:
+                            # Already matched as visitor, keep existing assignment
+                            pass
+                        else:
+                            match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
                             if match_vis:
                                 visitor, sim = match_vis
                                 track_info.update({
                                     "type": "visitor",
                                     "id": visitor.id,
                                     "label": f"Visitor #{str(visitor.id)[:4]}",
-                                    "color": (0, 180, 255),
-                                    "matched": True
+                                    "color": (0, 180, 255)
                                 })
                                 unique_seen_identities.add(f"visitor:{visitor.id}")
-                                # Keep database updated with new profile details
-                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                await repo.create_person_embedding(identity_id=visitor.id, embedding=face_embedding.tolist(), bbox=matched_face["bbox"], timestamp=timestamp_sec)
                             else:
-                                # Create new anonymous identity
-                                visitor = await repo.create_person_identity(session.tenant_id)
-                                await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[x1, y1, x2, y2], timestamp=timestamp_sec)
+                                # 3. Create new Face Visitor
+                                visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
+                                await repo.create_person_embedding(identity_id=visitor.id, embedding=face_embedding.tolist(), bbox=matched_face["bbox"], timestamp=timestamp_sec)
                                 track_info.update({
                                     "type": "visitor",
                                     "id": visitor.id,
                                     "label": "New Visitor",
                                     "color": (0, 0, 255),
-                                    "matched": True
+                                    "is_new_visitor": True
                                 })
                                 unique_seen_identities.add(f"visitor:{visitor.id}")
                                 first_time_visitors_count += 1
@@ -411,41 +585,6 @@ async def _process_video_job(
             else:
                 track_info["short_crossing"] = True
 
-    # Resolve unmatched tracks (e.g. tracks that lasted at least 10 frames but failed to match during the loop)
-    for tracker_id, track_info in active_tracks.items():
-        if not track_info.get("matched", False):
-            best_crop = track_info.get("best_crop")
-            if best_crop is not None:
-                embedding = extractor.get_embedding(best_crop)
-                if embedding is not None:
-                    # Match against generic visitors
-                    match_vis = await repo.find_similar_visitor(session.tenant_id, embedding.tolist(), similarity_threshold)
-                    if match_vis:
-                        visitor, sim = match_vis
-                        track_info.update({
-                                "type": "visitor",
-                                "id": visitor.id,
-                                "label": f"Visitor #{str(visitor.id)[:4]}",
-                                "color": (0, 180, 255),
-                                "matched": True
-                        })
-                        if not track_info.get("short_crossing", False):
-                            unique_seen_identities.add(f"visitor:{visitor.id}")
-                    else:
-                        # Create new anonymous identity
-                        visitor = await repo.create_person_identity(session.tenant_id)
-                        await repo.create_person_embedding(identity_id=visitor.id, embedding=embedding.tolist(), bbox=[0, 0, 0, 0], timestamp=track_info["first_seen"])
-                        track_info.update({
-                            "type": "visitor",
-                            "id": visitor.id,
-                            "label": "New Visitor",
-                            "color": (0, 0, 255),
-                            "matched": True
-                        })
-                        if not track_info.get("short_crossing", False):
-                            unique_seen_identities.add(f"visitor:{visitor.id}")
-                            first_time_visitors_count += 1
-
     # Filter crossings: only keep crossings for non-discarded tracks, and map to resolved visitor IDs
     valid_crossings = []
     if line_counter:
@@ -454,8 +593,8 @@ async def _process_video_job(
         exit_count = sum(1 for c in valid_crossings if c["direction"] == "out")
 
     for c in valid_crossings:
-        track_info = active_tracks[c["tracker_id"]]
-        if track_info["type"] == "visitor" and track_info["id"] is not None:
+        track_info = active_tracks.get(c["tracker_id"])
+        if track_info and track_info["type"] == "visitor" and track_info["id"] is not None:
             completed_crossings.append({
                 "session_id": session.id,
                 "identity_id": track_info["id"],
@@ -476,7 +615,9 @@ async def _process_video_job(
                 "employee_id": track["id"],
                 "first_seen": track["first_seen"],
                 "last_seen": track["last_seen"],
-                "occurrence_count": track["occurrences"]
+                "occurrence_count": track["occurrences"],
+                "entry_time": track.get("first_seen_timestamp"),
+                "exit_time": track.get("last_seen_timestamp")
             })
         else:
             crop_path = None
@@ -497,11 +638,23 @@ async def _process_video_job(
                 "crop_path": crop_path
             })
 
+            completed_visitor_attendance.append({
+                "session_id": session.id,
+                "identity_id": track["id"],
+                "first_seen_sec": track["first_seen"],
+                "last_seen_sec": track["last_seen"],
+                "occurrence_increment": track["occurrences"],
+                "entry_time": track.get("first_seen_timestamp"),
+                "exit_time": track.get("last_seen_timestamp")
+            })
+
     # Bulk insert occurrences, attendance, and crossings to database
     for occ in completed_occurrences:
         await repo.create_person_occurrence(**occ)
     for att in completed_attendance:
         await repo.create_employee_attendance(**att)
+    for vis_att in completed_visitor_attendance:
+        await repo.log_visitor_attendance(**vis_att)
     for crs in completed_crossings:
         await repo.create_line_crossing(**crs)
 

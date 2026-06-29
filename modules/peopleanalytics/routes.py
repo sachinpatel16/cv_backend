@@ -1,5 +1,6 @@
 import os
 import uuid
+import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile, status, HTTPException
 from fastapi.responses import FileResponse
@@ -15,7 +16,8 @@ from modules.peopleanalytics.schema import (
     VisitorAnalyticsReport,
     UploadedVideoResponse,
     ProcessVideosRequest,
-    SessionDetectedPerson
+    SessionDetectedPerson,
+    VisitorAttendanceResponse
 )
 
 router = APIRouter(prefix="/peopleanalytics", tags=["CCTV People Analytics & Attendance"])
@@ -289,4 +291,28 @@ async def get_cross_video_visitor_analytics(
         message="Cross-video visitor analytics calculated successfully.",
         status=status.HTTP_200_OK,
         data=report
+    )
+
+
+@router.get(
+    "/visitors/attendance",
+    response_model=StandardResponse[List[VisitorAttendanceResponse]],
+    status_code=status.HTTP_200_OK
+)
+async def get_visitor_attendance_by_date_range(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    current_user: User = Depends(require_viewer),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves all visitor attendance logs within a specific date range.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = PeopleAnalyticsService(db)
+    logs = await service.get_visitor_attendance_by_date_range(tenant_id, start_date, end_date)
+    return StandardResponse(
+        message=f"Retrieved {len(logs)} visitor attendance logs between {start_date} and {end_date}.",
+        status=status.HTTP_200_OK,
+        data=[VisitorAttendanceResponse.model_validate(l) for l in logs]
     )

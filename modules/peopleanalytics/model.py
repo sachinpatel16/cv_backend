@@ -59,6 +59,9 @@ class PeopleAnalyticsSession(BaseModel):
     employee_attendance: Mapped[list["EmployeeAttendanceLog"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    visitor_attendance: Mapped[list["VisitorAttendanceLog"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
     occurrences: Mapped[list["PersonOccurrence"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
@@ -103,6 +106,9 @@ class PersonIdentity(BaseModel):
         back_populates="identity", cascade="all, delete-orphan"
     )
     crossings: Mapped[list["LineCrossingLog"]] = relationship(
+        back_populates="identity", cascade="all, delete-orphan"
+    )
+    attendance_logs: Mapped[list["VisitorAttendanceLog"]] = relationship(
         back_populates="identity", cascade="all, delete-orphan"
     )
 
@@ -152,3 +158,22 @@ class LineCrossingLog(BaseModel):
 
     session: Mapped["PeopleAnalyticsSession"] = relationship(back_populates="crossings")
     identity: Mapped["PersonIdentity"] = relationship(back_populates="crossings")
+
+
+class VisitorAttendanceLog(BaseModel):
+    """
+    Logs presence of anonymous unique visitors detected in an analytics session day-wise.
+    """
+    __tablename__ = "visitor_attendance_logs"
+
+    session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("people_analytics_sessions.id", ondelete="CASCADE"), nullable=True)
+    identity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("person_identities.id", ondelete="CASCADE"), nullable=False)
+    first_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False) # Video timestamp in seconds
+    last_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Video timestamp in seconds
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+
+    visitor_entry_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    visitor_exit_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    session: Mapped[Optional["PeopleAnalyticsSession"]] = relationship(back_populates="visitor_attendance")
+    identity: Mapped["PersonIdentity"] = relationship(back_populates="attendance_logs")

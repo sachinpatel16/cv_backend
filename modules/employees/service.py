@@ -173,8 +173,8 @@ class EmployeeService:
         similarity_threshold: float = 0.85,
         confidence_threshold: float = 0.3
     ) -> Tuple[List[EmployeeAttendanceLog], str]:
-        from datetime import datetime
-        now = datetime.utcnow()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         
         os.makedirs(os.path.join("storage", "group_photos"), exist_ok=True)
         unique_name = f"{uuid.uuid4()}{os.path.splitext(file.filename or '')[1].lower()}"
@@ -244,7 +244,8 @@ class EmployeeService:
                     first_seen_sec=0.0,
                     last_seen_sec=0.0,
                     occurrence_increment=1,
-                    detection_time=now
+                    entry_time=now,
+                    exit_time=now
                 )
                 checked_in_logs.append(log)
                 # Draw green box for matched employee
@@ -297,7 +298,16 @@ class EmployeeService:
         os.makedirs(inputs_dir, exist_ok=True)
 
         for file in files:
-            file_ext = os.path.splitext(file.filename or "")[1].lower()
+            original_name = file.filename or ""
+            # Prevent duplicate uploads
+            existing_video = await self.repo.get_uploaded_video_by_name(tenant_id, original_name)
+            if existing_video:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Video file '{original_name}' has already been uploaded."
+                )
+
+            file_ext = os.path.splitext(original_name)[1].lower()
             unique_name = f"{uuid.uuid4()}{file_ext}"
             filepath = os.path.join(inputs_dir, unique_name)
 
@@ -305,7 +315,6 @@ class EmployeeService:
             with open(filepath, "wb") as f:
                 f.write(content)
 
-            original_name = file.filename or unique_name
             uv = await self.repo.create_uploaded_video(
                 tenant_id=tenant_id,
                 original_name=original_name,
@@ -317,8 +326,8 @@ class EmployeeService:
         await self.db.commit()
         return uploaded_records
 
-    async def get_uploaded_videos(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> List[object]:
-        return await self.repo.get_uploaded_videos(tenant_id, user_id)
+    async def get_uploaded_videos(self, tenant_id: uuid.UUID) -> List[object]:
+        return await self.repo.get_uploaded_videos(tenant_id)
 
     async def delete_uploaded_video(self, video_id: uuid.UUID, tenant_id: uuid.UUID, current_user: object) -> None:
         video = await self.repo.get_uploaded_video_by_id(video_id, tenant_id)
@@ -354,12 +363,25 @@ class EmployeeService:
         global_confidence_threshold: float = 0.3,
         user_id: uuid.UUID = None
     ) -> List[object]:
+        # Validate all files exist on disk and belong to this tenant's module
         for item in videos:
             filepath = item.video_path
             if not os.path.exists(filepath):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Video file '{filepath}' does not exist on server storage."
+                )
+            if "employee_attendance_inputs" not in filepath:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Video file '{filepath}' is not a valid Employee Attendance video."
+                )
+            # Check tenant ownership in DB
+            existing_video = await self.repo.get_uploaded_video_by_path(tenant_id, filepath)
+            if not existing_video:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Unauthorized access or invalid video file: '{filepath}'"
                 )
 
         sessions = []

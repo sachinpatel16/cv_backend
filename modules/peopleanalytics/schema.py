@@ -92,3 +92,23 @@ class SessionDetectedPerson(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class VisitorAttendanceResponse(BaseModel):
+    id: UUID
+    session_id: Optional[UUID] = None
+    identity_id: UUID
+    first_seen: float = Field(..., description="Video timestamp in seconds when first detected")
+    last_seen: float = Field(..., description="Video timestamp in seconds when last detected")
+    occurrence_count: int = Field(..., description="How many separate frames matched this visitor")
+    visitor_entry_timestamp: datetime = Field(..., description="Real-world check-in timestamp")
+    visitor_exit_timestamp: datetime = Field(..., description="Real-world check-out timestamp")
+    created_at: datetime
+
+    @computed_field
+    @property
+    def dwell_time(self) -> float:
+        return round((self.visitor_exit_timestamp - self.visitor_entry_timestamp).total_seconds(), 2)
+
+    class Config:
+        from_attributes = True

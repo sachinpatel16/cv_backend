@@ -24,6 +24,16 @@ class FaceAnalyticsRepository(PeopleAnalyticsRepository):
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
+    async def get_uploaded_video_by_name(self, tenant_id: uuid.UUID, original_name: str) -> Optional[UploadedVideo]:
+        stmt = select(UploadedVideo).where(
+            UploadedVideo.tenant_id == tenant_id,
+            UploadedVideo.original_name == original_name,
+            UploadedVideo.saved_path.like("%face_analytics_inputs%"),
+            UploadedVideo.is_delete == False
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
     async def get_all_uploaded_videos(self, tenant_id: uuid.UUID) -> List[UploadedVideo]:
         stmt = select(UploadedVideo).where(
             UploadedVideo.tenant_id == tenant_id,
