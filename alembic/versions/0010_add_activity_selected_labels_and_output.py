@@ -1,8 +1,8 @@
 """add_activity_selected_labels_and_output
 
-Revision ID: 0009
-Revises: 0008
-Create Date: 2026-06-26 10:12:28.108548
+Revision ID: 0010
+Revises: 0009
+Create Date: 2026-06-29 07:38:23.573122
 """
 
 from alembic import op
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '0009'
-down_revision = '0008'
+revision = '0010'
+down_revision = '0009'
 branch_labels = None
 depends_on = None
 
