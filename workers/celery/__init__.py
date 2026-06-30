@@ -21,5 +21,5 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-    imports=["modules.peoplefind.tasks", "workers.tasks", "modules.smokingdetect.tasks"]
+    imports=["modules.peoplefind.tasks", "workers.tasks", "modules.activity.tasks", "modules.peopleanalytics.tasks", "modules.employees.tasks", "modules.faceanalytics.tasks", "workers.tasks", "modules.activity.tasks", "modules.smokingdetect.tasks"]
 )

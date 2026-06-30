@@ -3,6 +3,7 @@ version: '3.9'
 services:
   db:
     image: pgvector/pgvector:pg15
+    platform: linux/amd64   # add this
     container_name: cv_backend_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -44,6 +45,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-admin}@db:5432/${POSTGRES_DB:-cv_db}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
     depends_on:
       db:
         condition: service_healthy
@@ -53,7 +55,7 @@ services:
   worker:
     build: .
     container_name: cv_backend_worker
-    command: celery -A workers.celery worker --loglevel=info
+    command: celery -A workers.celery worker --loglevel=info --concurrency=1
     volumes:
       - .:/app
       - ${INSIGHTFACE_CACHE_DIR:-~/.insightface}:/root/.insightface
@@ -64,6 +66,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-admin}@db:5432/${POSTGRES_DB:-cv_db}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
     depends_on:
       db:
         condition: service_healthy
