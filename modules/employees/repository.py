@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from modules.employees.model import Employee, EmployeeEmbedding
-from modules.peopleanalytics.model import EmployeeAttendanceLog, PeopleAnalyticsSession
+from modules.peopleanalytics.model import EmployeeAttendanceLog, PeopleAnalyticsSession, EmployeeSessionDetection
 
 class EmployeeRepository:
     def __init__(self, db: AsyncSession):
@@ -102,18 +102,18 @@ class EmployeeRepository:
         row = result.first()
         return (row[0], float(row[1])) if row else None
 
-    async def get_employee_attendance_report(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> List[EmployeeAttendanceLog]:
+    async def get_employee_attendance_report(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> List[EmployeeSessionDetection]:
         stmt = (
-            select(EmployeeAttendanceLog)
-            .join(PeopleAnalyticsSession, EmployeeAttendanceLog.session_id == PeopleAnalyticsSession.id)
-            .options(selectinload(EmployeeAttendanceLog.employee))
+            select(EmployeeSessionDetection)
+            .join(PeopleAnalyticsSession, EmployeeSessionDetection.session_id == PeopleAnalyticsSession.id)
+            .options(selectinload(EmployeeSessionDetection.employee))
             .where(
-                EmployeeAttendanceLog.session_id == session_id,
+                EmployeeSessionDetection.session_id == session_id,
                 PeopleAnalyticsSession.tenant_id == tenant_id,
-                EmployeeAttendanceLog.is_delete == False,
+                EmployeeSessionDetection.is_delete == False,
                 PeopleAnalyticsSession.is_delete == False
             )
-            .order_by(EmployeeAttendanceLog.first_seen.asc())
+            .order_by(EmployeeSessionDetection.first_seen.asc())
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
@@ -200,9 +200,6 @@ class EmployeeRepository:
 
             if session_id and not log.session_id:
                 log.session_id = session_id
-
-            await self.db.flush()
-            return log
         else:
             # Create a new log for the day
             log = EmployeeAttendanceLog(
@@ -215,8 +212,34 @@ class EmployeeRepository:
                 employee_exit_timestamp=exit_time
             )
             self.db.add(log)
-            await self.db.flush()
-            return log
+
+        # Log/Update employee session detection
+        if session_id:
+            stmt_det = select(EmployeeSessionDetection).where(
+                EmployeeSessionDetection.session_id == session_id,
+                EmployeeSessionDetection.employee_id == employee_id,
+                EmployeeSessionDetection.is_delete == False
+            )
+            res_det = await self.db.execute(stmt_det)
+            det = res_det.scalars().first()
+            if det:
+                det.occurrence_count += occurrence_increment
+                if first_seen_sec < det.first_seen:
+                    det.first_seen = first_seen_sec
+                if last_seen_sec > det.last_seen:
+                    det.last_seen = last_seen_sec
+            else:
+                det = EmployeeSessionDetection(
+                    session_id=session_id,
+                    employee_id=employee_id,
+                    first_seen=first_seen_sec,
+                    last_seen=last_seen_sec,
+                    occurrence_count=occurrence_increment
+                )
+                self.db.add(det)
+
+        await self.db.flush()
+        return log
 
     async def create_uploaded_video(
         self, tenant_id: uuid.UUID, original_name: str, saved_path: str, user_id: Optional[uuid.UUID] = None

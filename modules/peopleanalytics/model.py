@@ -59,6 +59,9 @@ class PeopleAnalyticsSession(BaseModel):
     employee_attendance: Mapped[list["EmployeeAttendanceLog"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    employee_session_detections: Mapped[list["EmployeeSessionDetection"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
     visitor_attendance: Mapped[list["VisitorAttendanceLog"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
@@ -177,3 +180,29 @@ class VisitorAttendanceLog(BaseModel):
 
     session: Mapped[Optional["PeopleAnalyticsSession"]] = relationship(back_populates="visitor_attendance")
     identity: Mapped["PersonIdentity"] = relationship(back_populates="attendance_logs")
+
+
+class EmployeeSessionDetection(BaseModel):
+    """
+    Logs presence of registered employees detected in a specific video session.
+    """
+    __tablename__ = "employee_session_detections"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("people_analytics_sessions.id", ondelete="CASCADE"), nullable=False)
+    employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    first_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False) # Video timestamp in seconds
+    last_seen: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Video timestamp in seconds
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+
+    session: Mapped["PeopleAnalyticsSession"] = relationship(back_populates="employee_session_detections")
+    employee: Mapped["Employee"] = relationship(back_populates="session_detections")
+
+    @property
+    def employee_entry_timestamp(self) -> datetime:
+        return self.created_at
+
+    @property
+    def employee_exit_timestamp(self) -> datetime:
+        return self.update_at
+
+
