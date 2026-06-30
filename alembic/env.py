@@ -36,7 +36,8 @@ from modules.peopleanalytics.model import (
     PersonIdentity,
     PersonEmbedding,
     PersonOccurrence,
-    LineCrossingLog
+    LineCrossingLog,
+    VisitorAttendanceLog
 )
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult

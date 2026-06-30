@@ -281,11 +281,11 @@ async def list_attendance_uploads(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retrieves all video files uploaded by the active user for employee video attendance.
+    Retrieves all video files uploaded by the active tenant for employee video attendance.
     """
     tenant_id = verify_tenant(current_user)
     service = EmployeeService(db)
-    videos = await service.get_uploaded_videos(tenant_id, current_user.id)
+    videos = await service.get_uploaded_videos(tenant_id)
     return StandardResponse(
         message=f"Successfully retrieved {len(videos)} uploaded video(s).",
         status=status.HTTP_200_OK,

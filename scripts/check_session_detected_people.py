@@ -7,37 +7,56 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.session import SessionLocal
 from modules.peopleanalytics.service import PeopleAnalyticsService
 from sqlalchemy import select
-from modules.peopleanalytics.model import PeopleAnalyticsSession
+from modules.peopleanalytics.model import PeopleAnalyticsSession, PersonOccurrence
 
 async def main():
     async with SessionLocal() as db:
-        # Find the latest completed session
+        # Find all completed sessions with people
         stmt = select(PeopleAnalyticsSession).where(
-            PeopleAnalyticsSession.status == "completed"
-        ).order_by(PeopleAnalyticsSession.completed_at.desc()).limit(1)
+            PeopleAnalyticsSession.status == "completed",
+            PeopleAnalyticsSession.unique_person_count > 0
+        ).order_by(PeopleAnalyticsSession.completed_at.desc())
         res = await db.execute(stmt)
-        session = res.scalars().first()
-        if not session:
-            print("No completed sessions found.")
+        sessions = res.scalars().all()
+        if not sessions:
+            print("No completed sessions with unique_person_count > 0 found.")
             return
 
-        session_id = session.id
-        tenant_id = session.tenant_id
+        for session in sessions:
+            session_id = session.id
+            tenant_id = session.tenant_id
         
-        service = PeopleAnalyticsService(db)
-        people = await service.get_session_detected_people(session_id, tenant_id)
-        
-        print(f"Latest completed session: {session_id}")
-        print(f"Total / Unique People count in DB session results: {session.unique_person_count}")
-        print(f"Detected {len(people)} people list items:")
-        for p in people:
-            print(f"- Type: {p.type}")
-            print(f"  Name: {p.name}")
-            print(f"  ID: {p.identity_id}")
-            print(f"  First seen: {p.first_seen}s")
-            print(f"  Last seen: {p.last_seen}s")
-            print(f"  Photo/Crop: {p.photo_path}")
-            print("-" * 35)
+            service = PeopleAnalyticsService(db)
+            try:
+                people = await service.get_session_detected_people(session_id, tenant_id)
+            except Exception as e:
+                continue
+            
+            print(f"Session: {session_id} | Video: {session.video_name}")
+            print(f"  Status: {session.status}")
+            print(f"  Unique: {session.unique_person_count} | Total: {session.total_person_count}")
+            print(f"  Visitor count: {session.visitor_count} | Employee count: {session.employee_count}")
+            print(f"  First time visitors: {session.first_time_visitor_count}")
+            
+            # Query raw occurrences
+            stmt_occ = select(PersonOccurrence).where(
+                PersonOccurrence.session_id == session_id,
+                PersonOccurrence.is_delete == False
+            ).order_by(PersonOccurrence.first_seen.asc())
+            res_occ = await db.execute(stmt_occ)
+            raw_occs = res_occ.scalars().all()
+            
+            print(f"  Total raw occurrences in DB: {len(raw_occs)}")
+            for i, occ in enumerate(raw_occs):
+                print(f"  Occ #{i}: ID={occ.identity_id}, Tracker={occ.tracker_id}, Crop={occ.crop_path}")
+                
+            print("  " + "-" * 50)
+            
+            people = await service.get_session_detected_people(session_id, tenant_id)
+            print(f"  DetectedPeople returned by service: {len(people)}")
+            for p in people:
+                print(f"  - {p.type} Name: {p.name}, ID: {p.identity_id}, Crop: {p.photo_path}")
+            print("=" * 60)
 
 if __name__ == "__main__":
     asyncio.run(main())
