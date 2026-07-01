@@ -42,7 +42,16 @@ class FaceAnalyticsService:
         uploaded_records = []
 
         for file in files:
-            file_ext = os.path.splitext(file.filename)[1].lower()
+            original_name = file.filename or ""
+            # Prevent duplicate uploads
+            existing_video = await self.repo.get_uploaded_video_by_name(tenant_id, original_name)
+            if existing_video:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Video file '{original_name}' has already been uploaded."
+                )
+
+            file_ext = os.path.splitext(original_name)[1].lower()
             unique_name = f"{uuid.uuid4()}{file_ext}"
             
             user_inputs_dir = os.path.join(FACE_INPUTS_DIR, str(user_id)) if user_id else FACE_INPUTS_DIR
@@ -54,7 +63,6 @@ class FaceAnalyticsService:
             with open(filepath, "wb") as f:
                 f.write(content)
 
-            original_name = file.filename or unique_name
             # Write to database
             uv = await self.repo.create_uploaded_video(
                 tenant_id=tenant_id,
@@ -105,13 +113,25 @@ class FaceAnalyticsService:
         global_confidence_threshold: float = 0.3,
         user_id: Optional[uuid.UUID] = None
     ) -> List[PeopleAnalyticsSession]:
-        # Validate all files exist on disk
+        # Validate all files exist on disk and belong to this tenant's module
         for item in videos:
             filepath = item.video_path
             if not os.path.exists(filepath):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Video file '{filepath}' does not exist on server storage."
+                )
+            if "face_analytics_inputs" not in filepath:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Video file '{filepath}' is not a valid Face Analytics video."
+                )
+            # Check tenant ownership in DB
+            existing_video = await self.repo.get_uploaded_video_by_path(tenant_id, filepath)
+            if not existing_video:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Unauthorized access or invalid video file: '{filepath}'"
                 )
 
         sessions = []

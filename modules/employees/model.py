@@ -25,6 +25,9 @@ class Employee(BaseModel):
     attendance_logs: Mapped[list["EmployeeAttendanceLog"]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
+    session_detections: Mapped[list["EmployeeSessionDetection"]] = relationship(
+        back_populates="employee", cascade="all, delete-orphan"
+    )
 
 
 class EmployeeEmbedding(BaseModel):

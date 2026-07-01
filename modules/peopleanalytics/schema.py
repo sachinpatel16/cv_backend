@@ -6,6 +6,20 @@ from typing import Optional, List
 from modules.employees.schema import EmployeeResponse
 
 
+class FirstTimeVisitorDetail(BaseModel):
+    identity_id: UUID
+    photo_path: Optional[str] = None
+    first_seen: float
+    last_seen: float
+
+    @computed_field
+    @property
+    def dwell_time(self) -> float:
+        return round(self.last_seen - self.first_seen, 2)
+
+    class Config:
+        from_attributes = True
+
 
 # --- PEOPLE ANALYTICS SESSIONS SCHEMAS ---
 
@@ -25,6 +39,7 @@ class PeopleAnalyticsSessionResponse(BaseModel):
     unique_person_count: Optional[int] = None
     total_person_count: Optional[int] = None
     first_time_visitor_count: Optional[int] = None
+    first_time_visitors: Optional[List[FirstTimeVisitorDetail]] = None
     peak_occupancy: Optional[int] = None
     average_occupancy: Optional[float] = None
     entry_count: Optional[int] = None
@@ -89,6 +104,26 @@ class SessionDetectedPerson(BaseModel):
     @property
     def dwell_time(self) -> float:
         return round(self.last_seen - self.first_seen, 2)
+
+    class Config:
+        from_attributes = True
+
+
+class VisitorAttendanceResponse(BaseModel):
+    id: UUID
+    session_id: Optional[UUID] = None
+    identity_id: UUID
+    first_seen: float = Field(..., description="Video timestamp in seconds when first detected")
+    last_seen: float = Field(..., description="Video timestamp in seconds when last detected")
+    occurrence_count: int = Field(..., description="How many separate frames matched this visitor")
+    visitor_entry_timestamp: datetime = Field(..., description="Real-world check-in timestamp")
+    visitor_exit_timestamp: datetime = Field(..., description="Real-world check-out timestamp")
+    created_at: datetime
+
+    @computed_field
+    @property
+    def dwell_time(self) -> float:
+        return round((self.visitor_exit_timestamp - self.visitor_entry_timestamp).total_seconds(), 2)
 
     class Config:
         from_attributes = True

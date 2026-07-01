@@ -3,19 +3,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 
-class FirstTimeVisitorDetail(BaseModel):
-    identity_id: UUID
-    photo_path: Optional[str] = None
-    first_seen: float
-    last_seen: float
-
-    @computed_field
-    @property
-    def dwell_time(self) -> float:
-        return round(self.last_seen - self.first_seen, 2)
-
-    class Config:
-        from_attributes = True
+from modules.peopleanalytics.schema import FirstTimeVisitorDetail
 
 
 class DetectedEmployeeDetail(BaseModel):

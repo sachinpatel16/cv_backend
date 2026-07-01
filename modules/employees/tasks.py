@@ -213,7 +213,8 @@ def process_employee_attendance_video_task(
                             first_seen_sec=track["first_seen"],
                             last_seen_sec=track["last_seen"],
                             occurrence_increment=track["occurrences"],
-                            detection_time=track.get("first_seen_timestamp")
+                            entry_time=track.get("first_seen_timestamp"),
+                            exit_time=track.get("last_seen_timestamp")
                         )
 
                 # Update session table details
