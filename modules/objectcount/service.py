@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.objectcount.repository import ObjectCountRepository
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
 from modules.objectcount.schema import ObjectCountAnalyzeRequest
+from shared.utils.image import convert_and_save_image
 
 OBJECTCOUNT_MEDIA_DIR = os.path.join("storage", "objectcount_media")
 OBJECTCOUNT_OUTPUTS_DIR = os.path.join("storage", "objectcount_outputs")
@@ -60,13 +61,23 @@ class ObjectCountService:
             filepath = os.path.join(OBJECTCOUNT_MEDIA_DIR, unique_name)
             
             content = await file.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
+
+            if media_type == 'photo':
+                # convert_and_save_image handles HEIC→JPEG automatically
+                filepath = convert_and_save_image(content, file.filename or unique_name, OBJECTCOUNT_MEDIA_DIR)
+                # Update filename if extension changed (e.g. .heic -> .jpg)
+                stored_filename = os.path.splitext(file.filename or unique_name)[0] + os.path.splitext(filepath)[1]
+            else:
+                # Videos: save as-is
+                filepath = os.path.join(OBJECTCOUNT_MEDIA_DIR, unique_name)
+                with open(filepath, "wb") as f:
+                    f.write(content)
+                stored_filename = file.filename or unique_name
 
             # Create media record in DB
             media = await self.repo.create_media(
                 tenant_id=tenant_id,
-                filename=file.filename or unique_name,
+                filename=stored_filename,
                 filepath=filepath,
                 media_type=media_type
             )
