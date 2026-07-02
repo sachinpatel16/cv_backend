@@ -23,6 +23,7 @@ This document describes the API endpoints for the **Smoking Detection** module (
 3. [Get Session Events](#3-get-session-events) (`GET /smokingdetect/sessions/{session_id}`)
 4. [Get Session Status](#4-get-session-status) (`GET /smokingdetect/sessions/{session_id}/status`)
 5. [Stream Annotated Video](#5-stream-annotated-video) (`GET /smokingdetect/sessions/{session_id}/video`)
+6. [Delete Session](#6-delete-session) (`DELETE /smokingdetect/sessions/{session_id}`)
 
 ---
 
@@ -252,3 +253,28 @@ curl -X GET "http://localhost:8000/api/v1/smokingdetect/sessions/a4d36eb8-3df0-4
 
 > [!CAUTION]
 > Requesting this endpoint before the session status becomes `"completed"` will result in a `409 Conflict` error.
+
+---
+
+### 6. Delete Session
+Soft deletes a smoking detection session and its associated event records, and removes all generated frames and annotated video files from disk.
+
+* **URL:** `/smokingdetect/sessions/{session_id}`
+* **Method:** `DELETE`
+* **Path Parameters:**
+  * `session_id`: `string (UUID)` (The ID of the session to delete)
+
+#### Example Request (cURL):
+```bash
+curl -X DELETE "http://localhost:8000/api/v1/smokingdetect/sessions/a4d36eb8-3df0-4b31-8f55-27a9228d4cb2" \
+  -H "accept: application/json"
+```
+
+#### Example Response (`200 OK`):
+```json
+{
+  "message": "Smoking session and all associated event records deleted successfully.",
+  "status": 200,
+  "data": null
+}
+```
