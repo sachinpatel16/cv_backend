@@ -46,6 +46,8 @@ from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
 from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
 
+from modules.smokingdetect.model import SmokingSession, SmokingEvent
+
 
 # Set target metadata for 'autogenerate'
 target_metadata = Base.metadata
