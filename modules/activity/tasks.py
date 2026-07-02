@@ -10,6 +10,7 @@ from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
 from modules.activity.repository import ActivityRepository
 from services.ai.activity_detection import activity_detection_service
 from workers.utils import run_async
+from shared.utils.video_format import videoFormatChanger
 
 ALERT_SNAPSHOTS_DIR = os.path.join("storage", "activity_alerts")
 os.makedirs(ALERT_SNAPSHOTS_DIR, exist_ok=True)
@@ -255,6 +256,13 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                             snapshot_path=snapshot_path,
                             severity=severity
                         )
+
+                if media.media_type == "video" and output_filepath:
+                    # Transcode output video to browser-compatible H.264 format using shared video utility
+                    try:
+                        videoFormatChanger(output_filepath, formats="h264", overwrite_input=True)
+                    except Exception as e:
+                        print(f"Video transcoding failed (falling back to raw mp4v): {e}")
 
                 media.output_filepath = output_filepath
                 media.status = "completed"
