@@ -30,8 +30,32 @@ class ObjectCountService:
         """
         results = []
         for file in files:
+            if file.filename:
+                # Smart Deduplication: Check if filename already exists for this tenant
+                existing = await self.repo.get_media_by_filename(file.filename, tenant_id)
+                if existing:
+                    if existing.status in {"completed", "processing"}:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"A video or photo with the filename '{file.filename}' has already been uploaded."
+                        )
+                    else:
+                        # Failed or pending status, delete old record & physical files and re-process
+                        if existing.filepath and os.path.exists(existing.filepath):
+                            try:
+                                os.remove(existing.filepath)
+                            except Exception:
+                                pass
+                        if existing.processed_filepath and os.path.exists(existing.processed_filepath):
+                            try:
+                                os.remove(existing.processed_filepath)
+                            except Exception:
+                                pass
+                        await self.db.delete(existing)
+                        await self.db.flush()
+
             # Save media file
-            file_ext = os.path.splitext(file.filename)[1].lower()
+            file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ".mp4"
             unique_name = f"{uuid.uuid4()}{file_ext}"
             filepath = os.path.join(OBJECTCOUNT_MEDIA_DIR, unique_name)
             
