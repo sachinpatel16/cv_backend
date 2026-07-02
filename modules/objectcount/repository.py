@@ -171,3 +171,13 @@ class ObjectCountRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_media_by_filename(self, filename: str, tenant_id: uuid.UUID) -> Optional[ObjectCountMedia]:
+        """Fetch active media by filename and tenant ID."""
+        stmt = select(ObjectCountMedia).where(
+            ObjectCountMedia.filename == filename,
+            ObjectCountMedia.tenant_id == tenant_id,
+            ObjectCountMedia.is_delete == False
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
