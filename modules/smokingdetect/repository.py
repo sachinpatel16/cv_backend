@@ -2,6 +2,7 @@ import uuid
 from typing import List, Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from modules.smokingdetect.model import SmokingSession, SmokingEvent
 
@@ -56,8 +57,6 @@ class SmokingDetectRepository:
         tenant_id: str,
     ) -> Optional[SmokingSession]:
         """Fetch a session by ID with events eagerly loaded, scoped to tenant."""
-        from sqlalchemy.orm import selectinload
-
         stmt = (
             select(SmokingSession)
             .options(selectinload(SmokingSession.events))
@@ -79,11 +78,12 @@ class SmokingDetectRepository:
         Fetch all non-deleted sessions for a tenant, eagerly loading the user relationship.
         Optionally filter by user_id for non-admin callers.
         """
-        from sqlalchemy.orm import selectinload
-
         stmt = (
             select(SmokingSession)
-            .options(selectinload(SmokingSession.user))
+            .options(
+                selectinload(SmokingSession.user),
+                selectinload(SmokingSession.events),
+            )
             .where(
                 SmokingSession.tenant_id == tenant_id,
                 SmokingSession.is_delete == False,
@@ -169,3 +169,23 @@ class SmokingDetectRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_session(
+        self,
+        session_id: uuid.UUID,
+        tenant_id: str,
+    ) -> Optional[SmokingSession]:
+        """Soft delete a smoking detection session and all its associated events."""
+        session = await self.get_session(session_id, tenant_id)
+        if session:
+            session.is_delete = True
+            
+            # Soft delete related events
+            await self.db.execute(
+                update(SmokingEvent)
+                .where(SmokingEvent.session_id == session_id)
+                .values(is_delete=True)
+            )
+            await self.db.flush()
+        return session
+

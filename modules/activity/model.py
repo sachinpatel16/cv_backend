@@ -22,6 +22,10 @@ class ActivityMedia(BaseModel):
     configs: Mapped[list["ActivityConfig"]] = relationship(back_populates="activity_media", cascade="all, delete-orphan")
     alerts: Mapped[list["ActivityAlert"]] = relationship(back_populates="activity_media", cascade="all, delete-orphan")
 
+    @property
+    def config(self) -> Optional["ActivityConfig"]:
+        return self.configs[0] if self.configs else None
+
 
 class ActivityConfig(BaseModel):
     """

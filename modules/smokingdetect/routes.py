@@ -230,3 +230,30 @@ async def stream_annotated_video(
         media_type="video/mp4",
         filename=f"smoking_analysis_{session_id}.mp4",
     )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    response_model=StandardResponse[None],
+    status_code=status.HTTP_200_OK,
+)
+async def delete_smoking_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Soft deletes a smoking detection session and its associated event records,
+    and removes the annotated video/frames from disk storage.
+    """
+    tenant_id = _verify_tenant(current_user)
+
+    service = SmokingDetectService(db)
+    await service.delete_session(session_id, tenant_id)
+
+    return StandardResponse(
+        message="Smoking session and all associated event records deleted successfully.",
+        status=status.HTTP_200_OK,
+        data=None,
+    )
+

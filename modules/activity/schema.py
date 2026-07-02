@@ -3,21 +3,6 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 
-# --- MEDIA SCHEMAS ---
-class ActivityMediaBase(BaseModel):
-    filename: str
-    media_type: str
-
-class ActivityMediaResponse(ActivityMediaBase):
-    id: UUID
-    filepath: str
-    output_filepath: Optional[str] = None
-    status: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
 # --- CONFIGURATION SCHEMAS ---
 class ActivityConfigBase(BaseModel):
     detect_fall: bool = True
@@ -54,6 +39,23 @@ class ActivityProcessPayload(ActivityConfigBase):
     interval: float = Field(1.0, description="Frame sampling interval in seconds")
 
 
+# --- MEDIA SCHEMAS ---
+class ActivityMediaBase(BaseModel):
+    filename: str
+    media_type: str
+
+class ActivityMediaResponse(ActivityMediaBase):
+    id: UUID
+    filepath: str
+    output_filepath: Optional[str] = None
+    status: str
+    created_at: datetime
+    config: Optional[ActivityConfigResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
 class ActivityProcessStatusResponse(BaseModel):
     media_id: UUID
     status: str
@@ -62,7 +64,6 @@ class ActivityProcessStatusResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 
 # --- ALERT REPORT SCHEMAS ---

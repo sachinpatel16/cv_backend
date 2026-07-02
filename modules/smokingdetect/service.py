@@ -1,5 +1,6 @@
 import os
 import uuid
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -151,3 +152,29 @@ class SmokingDetectService:
                 detail="Annotated video is not yet available for this session.",
             )
         return session.video_out_path
+
+    async def delete_session(
+        self,
+        session_id: uuid.UUID,
+        tenant_id: str,
+    ) -> None:
+        """Deletes smoking detection session record, associated events, and physical files."""
+        session = await self.repo.get_session(session_id, tenant_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Smoking detection session not found or unauthorized access.",
+            )
+
+        # Remove the session's results directory (contains annotated video and frames)
+        session_id_str = str(session_id)
+        output_dir = os.path.join(SMOKING_DETECTION_DIR, session_id_str)
+        if os.path.exists(output_dir):
+            try:
+                shutil.rmtree(output_dir)
+            except Exception:
+                pass
+
+        await self.repo.delete_session(session_id, tenant_id)
+        await self.db.commit()
+

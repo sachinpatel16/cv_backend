@@ -2,6 +2,7 @@ import uuid
 from typing import List, Optional
 from sqlalchemy import select, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
 
 class ActivityRepository:
@@ -47,6 +48,7 @@ class ActivityRepository:
         """Fetch all non-deleted activity media for a tenant."""
         stmt = (
             select(ActivityMedia)
+            .options(selectinload(ActivityMedia.configs))
             .where(
                 ActivityMedia.tenant_id == tenant_id,
                 ActivityMedia.is_delete == False
