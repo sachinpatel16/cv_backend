@@ -44,6 +44,7 @@ class EmployeeAttendanceResponse(BaseModel):
 
 
 class GroupPhotoAttendanceResponse(BaseModel):
+    session_id: Optional[UUID] = Field(None, description="The unique session ID associated with this group photo attendance run")
     annotated_image_path: str = Field(..., description="Path to the single annotated group photo showing all employees and names")
     attendance_logs: list[EmployeeAttendanceResponse] = Field(..., description="List of attendance check-in logs for matched employees")
 

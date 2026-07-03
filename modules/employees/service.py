@@ -169,20 +169,44 @@ class EmployeeService:
     async def process_group_photo_attendance(
         self,
         tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
         file: UploadFile,
         similarity_threshold: float = 0.85,
         confidence_threshold: float = 0.3
-    ) -> Tuple[List[EmployeeAttendanceLog], str]:
+    ) -> Tuple[List[EmployeeAttendanceLog], str, uuid.UUID]:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         
-        os.makedirs(os.path.join("storage", "group_photos"), exist_ok=True)
-        unique_name = f"{uuid.uuid4()}{os.path.splitext(file.filename or '')[1].lower()}"
-        filepath = os.path.join("storage", "group_photos", unique_name)
+        session_id = uuid.uuid4()
+        
+        inputs_dir = os.path.join("storage", "employee_attendance_inputs", str(user_id))
+        outputs_dir = os.path.join("storage", "employee_attendance_outputs", str(user_id))
+        os.makedirs(inputs_dir, exist_ok=True)
+        os.makedirs(outputs_dir, exist_ok=True)
+        
+        file_ext = os.path.splitext(file.filename or "")[1].lower()
+        if not file_ext:
+            file_ext = ".jpg"
+            
+        unique_name = f"group_photo_{session_id}{file_ext}"
+        filepath = os.path.join(inputs_dir, unique_name)
         
         content = await file.read()
         with open(filepath, "wb") as f:
             f.write(content)
+
+        from modules.peopleanalytics.model import PeopleAnalyticsSession
+        session = PeopleAnalyticsSession(
+            id=session_id,
+            tenant_id=tenant_id,
+            video_name=file.filename or "group_photo.jpg",
+            video_path=filepath,
+            similarity_threshold=similarity_threshold,
+            confidence_threshold=confidence_threshold,
+            status="pending"
+        )
+        self.db.add(session)
+        await self.db.flush()
 
         # Decode image using Pillow for maximum compatibility (HEIC, PNG, JPEG, WEBP, etc.)
         from PIL import Image
@@ -204,6 +228,8 @@ class EmployeeService:
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if img is None:
+            session.status = "failed"
+            await self.db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid image upload. Could not decode group photo."
@@ -223,6 +249,8 @@ class EmployeeService:
         try:
             faces = face_rec_service.extract_faces(img_bytes)
         except Exception as e:
+            session.status = "failed"
+            await self.db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Could not extract faces from photo: {str(e)}"
@@ -240,7 +268,7 @@ class EmployeeService:
                 log = await self.repo.log_employee_attendance(
                     tenant_id=tenant_id,
                     employee_id=employee.id,
-                    session_id=None,
+                    session_id=session.id,
                     first_seen_sec=0.0,
                     last_seen_sec=0.0,
                     occurrence_increment=1,
@@ -258,13 +286,20 @@ class EmployeeService:
                 cv2.putText(img, "Unknown", (fx1, fy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         # Save output annotated image
-        output_dir = os.path.join("storage", "group_photos_outputs")
-        os.makedirs(output_dir, exist_ok=True)
-        output_filename = f"{os.path.splitext(unique_name)[0]}_annotated.jpg"
-        output_filepath = os.path.join(output_dir, output_filename)
+        output_filename = f"{session.id}_annotated.jpg"
+        output_filepath = os.path.join(outputs_dir, output_filename)
         cv2.imwrite(output_filepath, img)
 
+        session.status = "completed"
+        session.output_video_path = output_filepath
+        session.completed_at = now
+
         unique_logs = {log.id: log for log in checked_in_logs}.values()
+
+        session.unique_person_count = len(unique_logs)
+        session.total_person_count = len(faces)
+        session.entry_count = len(unique_logs)
+        session.exit_count = 0
         
         from sqlalchemy.orm import selectinload
         from sqlalchemy import select
@@ -273,13 +308,13 @@ class EmployeeService:
         log_ids = [l.id for l in unique_logs]
         if not log_ids:
             await self.db.commit()
-            return [], output_filepath
+            return [], output_filepath, session.id
             
         stmt = select(EAL).options(selectinload(EAL.employee)).where(EAL.id.in_(log_ids))
         res = await self.db.execute(stmt)
         
         await self.db.commit()
-        return list(res.scalars().all()), output_filepath
+        return list(res.scalars().all()), output_filepath, session.id
 
     async def upload_attendance_video_files(
         self,
