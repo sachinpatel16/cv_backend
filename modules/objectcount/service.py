@@ -126,6 +126,14 @@ class ObjectCountService:
             classes_to_track=configs.classes_to_track,
             report_summary=None
         )
+        # Clear any old progress from Redis
+        from database.redis import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            try:
+                await redis_client.delete(f"objectcount:progress:{media_id}")
+            except Exception:
+                pass
         await self.db.commit()
 
         # Trigger background tracking Celery task
