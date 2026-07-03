@@ -26,20 +26,28 @@ class ActivityRepository:
 
     async def get_activity_media_by_id(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[ActivityMedia]:
         """Fetch activity media source by ID, scoped to tenant."""
-        stmt = select(ActivityMedia).where(
-            ActivityMedia.id == media_id,
-            ActivityMedia.tenant_id == tenant_id,
-            ActivityMedia.is_delete == False
+        stmt = (
+            select(ActivityMedia)
+            .options(selectinload(ActivityMedia.configs))
+            .where(
+                ActivityMedia.id == media_id,
+                ActivityMedia.tenant_id == tenant_id,
+                ActivityMedia.is_delete == False
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
     async def get_activity_media_by_filename(self, filename: str, tenant_id: uuid.UUID) -> Optional[ActivityMedia]:
         """Fetch activity media source by filename, scoped to tenant."""
-        stmt = select(ActivityMedia).where(
-            ActivityMedia.filename == filename,
-            ActivityMedia.tenant_id == tenant_id,
-            ActivityMedia.is_delete == False
+        stmt = (
+            select(ActivityMedia)
+            .options(selectinload(ActivityMedia.configs))
+            .where(
+                ActivityMedia.filename == filename,
+                ActivityMedia.tenant_id == tenant_id,
+                ActivityMedia.is_delete == False
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()

@@ -82,7 +82,9 @@ class ActivityService:
             )
             await self.db.commit()
 
-            results.append(media)
+            # Reload to include the eagerly loaded configs relationship
+            loaded = await self.repo.get_activity_media_by_id(media.id, tenant_id)
+            results.append(loaded or media)
 
         return results
 
@@ -153,6 +155,11 @@ class ActivityService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to submit background activity tracking task: {e}"
             )
+
+        loaded = await self.repo.get_activity_media_by_id(media_id, tenant_id)
+        if loaded:
+            loaded.status = "processing"
+            return loaded
 
         media.status = "processing"
         return media
