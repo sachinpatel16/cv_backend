@@ -58,3 +58,4 @@ class ObjectCountAnalyzeRequest(BaseModel):
     imgsz: int = 480
     entry_exit_report: bool = False
     line_coords: Optional[List[List[int]]] = None
+    device: Optional[str] = None

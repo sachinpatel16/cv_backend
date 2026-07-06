@@ -31,8 +31,8 @@ class InsightFaceGenderClassifier:
             else:
                 raise FileNotFoundError(f"InsightFace model weights not found at: {weights_file.absolute()} or {fallback_path.absolute()}")
         
-        self.input_mean = 127.5
-        self.input_std = 128.0
+        self.input_mean = 0.0
+        self.input_std = 1.0
         
         try:
             self.session = ort.InferenceSession(str(weights_file), providers=providers)
@@ -63,8 +63,9 @@ class InsightFaceGenderClassifier:
                 return {"gender": "Male", "confidence": 0.5}
                 
             aimg = cv2.resize(face_image, (96, 96))
-            # InsightFace ONNX models are trained on BGR images; do not convert to RGB
-            normalized = (aimg.astype(np.float32) - self.input_mean) / self.input_std
+            # Preprocess crop (resize to 96x96 and swap channels BGR -> RGB)
+            rgb = cv2.cvtColor(aimg, cv2.COLOR_BGR2RGB)
+            normalized = (rgb.astype(np.float32) - self.input_mean) / self.input_std
             blob = np.transpose(normalized, (2, 0, 1))
             blob = np.expand_dims(blob, axis=0) # Add batch dim (1, 3, 96, 96)
             

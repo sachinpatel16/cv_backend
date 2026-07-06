@@ -140,3 +140,4 @@ storage/
 # Large Model Files
 *.pb
 models/activity/frozen_inference_graph.pb
+models/objectcount/
