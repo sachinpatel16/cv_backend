@@ -138,7 +138,7 @@ class ObjectCountService:
 
         # Trigger background tracking Celery task
         try:
-            from workers.tasks import index_objectcount_task
+            from modules.objectcount.tasks import index_objectcount_task
             index_objectcount_task.delay(
                 str(media.id),
                 media.filepath,

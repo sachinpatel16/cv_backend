@@ -102,6 +102,7 @@ Triggers a customized background YOLO + BoT-SORT + InsightFace analysis task on 
   * `imgsz`: `integer` (Optional. Frame size/resolution for YOLO detection. Default: `480`)
   * `entry_exit_report`: `boolean` (Optional. Enables counting crossings in both directions relative to a defined line. Default: `false`)
   * `line_coords`: `integer[][]` (Optional. Line coordinates defined as a list of two points, e.g., `[[100, 200], [300, 400]]`. If `entry_exit_report` is enabled but `line_coords` is not defined, it defaults to a horizontal line in the middle of the video.)
+  * `device`: `string` (Optional. Execution device: `"cpu"` or `"cuda"`. Default: `null` for auto-detect)
 
 #### Example Request (cURL):
 ```bash
@@ -119,7 +120,8 @@ curl -X POST "http://localhost:8000/api/v1/objectcount/media/f357b226-fe93-49c3-
     "reid_classes": ["person"],
     "imgsz": 480,
     "entry_exit_report": true,
-    "line_coords": [[0, 360], [1280, 360]]
+    "line_coords": [[0, 360], [1280, 360]],
+    "device": "cpu"
   }'
 ```
 
