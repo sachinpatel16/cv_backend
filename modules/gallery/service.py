@@ -40,8 +40,8 @@ class GalleryService:
                     await self.db.delete(existing)
                     await self.db.flush()
 
-            content = await file.read()
             if media_type == "photo":
+                content = await file.read()
                 filepath = convert_and_save_image(content, file.filename, GALLERY_DIR)
                 unique_name = os.path.basename(filepath)
             else:
@@ -49,7 +49,11 @@ class GalleryService:
                 unique_name = f"{uuid.uuid4()}{file_ext}"
                 filepath = os.path.join(GALLERY_DIR, unique_name)
                 with open(filepath, "wb") as f:
-                    f.write(content)
+                    while True:
+                        chunk = await file.read(1024 * 1024)  # 1MB chunk size
+                        if not chunk:
+                            break
+                        f.write(chunk)
 
             # Create database record in "completed" or "pending" status initially.
             # In general, we mark it as "completed" upload, or "pending" if it awaits processing.
