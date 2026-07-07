@@ -33,7 +33,6 @@ os.makedirs(ANALYTICS_OUTPUTS_DIR, exist_ok=True)
 VISITOR_CROPS_DIR = os.path.join("storage", "visitor_crops")
 os.makedirs(VISITOR_CROPS_DIR, exist_ok=True)
 
-
 @celery_app.task(name="modules.peopleanalytics.tasks.process_people_analytics_task")
 def process_people_analytics_task(
     session_id_str: str,

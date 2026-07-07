@@ -43,7 +43,7 @@ class GalleryRepository:
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
-    async def get_all_media(self, tenant_id: uuid.UUID) -> List[GalleryMedia]:
+    async def get_all_media(self, tenant_id: uuid.UUID, media_type: Optional[str] = None) -> List[GalleryMedia]:
         """Fetch all active, non-deleted gallery media scoped to a tenant."""
         stmt = (
             select(GalleryMedia)
@@ -51,8 +51,11 @@ class GalleryRepository:
                 GalleryMedia.tenant_id == tenant_id,
                 GalleryMedia.is_delete == False
             )
-            .order_by(GalleryMedia.created_at.desc())
         )
+        if media_type:
+            stmt = stmt.where(GalleryMedia.media_type == media_type)
+            
+        stmt = stmt.order_by(GalleryMedia.created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

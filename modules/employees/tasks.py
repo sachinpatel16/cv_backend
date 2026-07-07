@@ -22,7 +22,6 @@ from services.ai.math_utils import map_similarity_threshold, find_best_match_in_
 from modules.employees.cache import get_cached_employee_embeddings
 from shared.utils.video_format import videoFormatChanger
 
-
 @celery_app.task(name="modules.employees.tasks.process_employee_attendance_video_task")
 def process_employee_attendance_video_task(
     session_id_str: str,

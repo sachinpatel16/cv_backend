@@ -1,5 +1,5 @@
 import uuid
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile, Form, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,8 @@ async def upload_gallery_media(
     media_list = await service.upload_media_batch(files, media_type, tenant_id)
     
     # Invalidate media list cache for this tenant
-    await delete_cached(f"gallery_media_list:{tenant_id}")
+    for suffix in ["", ":all", ":photo", ":video"]:
+        await delete_cached(f"gallery_media_list:{tenant_id}{suffix}")
     
     media_data = [GalleryMediaResponse.model_validate(m) for m in media_list]
     return StandardResponse(
@@ -63,6 +64,7 @@ async def upload_gallery_media(
     status_code=status.HTTP_200_OK
 )
 async def list_gallery_media(
+    media_type: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -70,7 +72,14 @@ async def list_gallery_media(
     Retrieves all non-deleted gallery photos and videos scoped to your tenant.
     """
     tenant_id = verify_tenant(current_user)
-    cache_key = f"gallery_media_list:{tenant_id}"
+    
+    if media_type and media_type not in {"photo", "video"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid media_type query parameter. Supported options are 'photo' or 'video'."
+        )
+
+    cache_key = f"gallery_media_list:{tenant_id}:{media_type or 'all'}"
     
     cached = await get_cached(cache_key)
     if cached is not None:
@@ -81,7 +90,7 @@ async def list_gallery_media(
         )
     
     service = GalleryService(db)
-    media_list = await service.get_all_media_sources(tenant_id)
+    media_list = await service.get_all_media_sources(tenant_id, media_type)
     
     media_data = [GalleryMediaResponse.model_validate(m) for m in media_list]
     await set_cached(cache_key, [m.model_dump(mode="json") for m in media_data], expire=3600)
@@ -140,7 +149,8 @@ async def delete_gallery_media(
     await service.delete_media_source(media_id, tenant_id)
     
     # Invalidate gallery media list cache
-    await delete_cached(f"gallery_media_list:{tenant_id}")
+    for suffix in ["", ":all", ":photo", ":video"]:
+        await delete_cached(f"gallery_media_list:{tenant_id}{suffix}")
     
     return StandardResponse(
         message="Gallery media source deleted successfully.",
@@ -166,7 +176,8 @@ async def delete_all_gallery_media(
     deleted_count = await service.delete_all_media_sources(tenant_id)
     
     # Invalidate gallery media list cache
-    await delete_cached(f"gallery_media_list:{tenant_id}")
+    for suffix in ["", ":all", ":photo", ":video"]:
+        await delete_cached(f"gallery_media_list:{tenant_id}{suffix}")
     
     return StandardResponse(
         message=f"Successfully deleted {deleted_count} gallery media file(s).",

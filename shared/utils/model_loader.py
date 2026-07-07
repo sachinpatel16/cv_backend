@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Base path relative to cv_backend root
-_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MODELS_DIR = os.path.join(_BASE_DIR, "models")
 
 # Standard YOLO public CDN urls for auto-download if missing

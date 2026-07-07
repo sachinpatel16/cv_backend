@@ -51,9 +51,25 @@ class GroupPhotoAttendanceResponse(BaseModel):
 
 
 class EmployeeVideoProcessItem(BaseModel):
-    video_path: str = Field(..., description="Unique saved video path")
+    gallery_media_id: UUID = Field(..., description="UUID of the gallery video item to process")
 
 
 class EmployeeProcessVideosRequest(BaseModel):
     videos: list[EmployeeVideoProcessItem] = Field(..., description="List of videos to process")
 
+
+class EmployeePhotoProcessRequest(BaseModel):
+    gallery_media_id: UUID = Field(..., description="UUID of the gallery photo item to process")
+    similarity_threshold: Optional[float] = Field(0.85, description="Face recognition threshold")
+    confidence_threshold: Optional[float] = Field(0.3, description="YOLO confidence threshold")
+
+
+class UploadedPhotoResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    filename: str
+    filepath: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

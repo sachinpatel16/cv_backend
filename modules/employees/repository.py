@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from modules.employees.model import Employee, EmployeeEmbedding
 from modules.peopleanalytics.model import EmployeeAttendanceLog, PeopleAnalyticsSession, EmployeeSessionDetection
+from modules.gallery.model import GalleryMedia
 
 class EmployeeRepository:
     def __init__(self, db: AsyncSession):
@@ -241,61 +242,7 @@ class EmployeeRepository:
         await self.db.flush()
         return log
 
-    async def create_uploaded_video(
-        self, tenant_id: uuid.UUID, original_name: str, saved_path: str, user_id: Optional[uuid.UUID] = None
-    ) -> object:
-        from modules.peopleanalytics.model import UploadedVideo
-        uv = UploadedVideo(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            original_name=original_name,
-            saved_path=saved_path
-        )
-        self.db.add(uv)
-        await self.db.flush()
-        return uv
 
-    async def get_uploaded_video_by_name(self, tenant_id: uuid.UUID, original_name: str) -> Optional[object]:
-        from modules.peopleanalytics.model import UploadedVideo
-        stmt = select(UploadedVideo).where(
-            UploadedVideo.tenant_id == tenant_id,
-            UploadedVideo.original_name == original_name,
-            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
-            UploadedVideo.is_delete == False
-        )
-        result = await self.db.execute(stmt)
-        return result.scalars().first()
-
-    async def get_uploaded_video_by_path(self, tenant_id: uuid.UUID, saved_path: str) -> Optional[object]:
-        from modules.peopleanalytics.model import UploadedVideo
-        stmt = select(UploadedVideo).where(
-            UploadedVideo.tenant_id == tenant_id,
-            UploadedVideo.saved_path == saved_path,
-            UploadedVideo.is_delete == False
-        )
-        result = await self.db.execute(stmt)
-        return result.scalars().first()
-
-    async def get_uploaded_videos(self, tenant_id: uuid.UUID) -> list:
-        from modules.peopleanalytics.model import UploadedVideo
-        stmt = select(UploadedVideo).where(
-            UploadedVideo.tenant_id == tenant_id,
-            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
-            UploadedVideo.is_delete == False
-        ).order_by(UploadedVideo.created_at.desc())
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_uploaded_video_by_id(self, video_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[object]:
-        from modules.peopleanalytics.model import UploadedVideo
-        stmt = select(UploadedVideo).where(
-            UploadedVideo.id == video_id,
-            UploadedVideo.tenant_id == tenant_id,
-            UploadedVideo.saved_path.like("%employee_attendance_inputs%"),
-            UploadedVideo.is_delete == False
-        )
-        result = await self.db.execute(stmt)
-        return result.scalars().first()
 
     async def create_analytics_session(
         self,
@@ -316,19 +263,55 @@ class EmployeeRepository:
             line_end=line_end,
             similarity_threshold=similarity_threshold,
             confidence_threshold=confidence_threshold,
+            session_type="employees",
             status="pending"
         )
         self.db.add(session)
         await self.db.flush()
         return session
 
-    async def get_sessions(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> list:
+    async def get_sessions(self, tenant_id: uuid.UUID) -> list:
         from modules.peopleanalytics.model import PeopleAnalyticsSession
         stmt = select(PeopleAnalyticsSession).where(
             PeopleAnalyticsSession.tenant_id == tenant_id,
-            PeopleAnalyticsSession.video_path.like(f"%employee_attendance_inputs/{user_id}/%"),
+            PeopleAnalyticsSession.session_type == "employees",
             PeopleAnalyticsSession.is_delete == False
         ).order_by(PeopleAnalyticsSession.created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_uploaded_photos(self, tenant_id: uuid.UUID) -> List[GalleryMedia]:
+        from modules.gallery.model import GalleryMedia
+        stmt = select(GalleryMedia).where(
+            GalleryMedia.tenant_id == tenant_id,
+            GalleryMedia.media_type == "photo",
+            GalleryMedia.is_delete == False
+        ).order_by(GalleryMedia.created_at.desc())
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete_photo_session(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[Tuple[str, Optional[str]]]:
+        """
+        Soft deletes the photo session and returns its input/output file paths for physical deletion.
+        """
+        from modules.peopleanalytics.model import PeopleAnalyticsSession
+        stmt = select(PeopleAnalyticsSession).where(
+            PeopleAnalyticsSession.id == session_id,
+            PeopleAnalyticsSession.tenant_id == tenant_id,
+            PeopleAnalyticsSession.session_type == "employees",
+            PeopleAnalyticsSession.is_delete == False
+        )
+        res = await self.db.execute(stmt)
+        session = res.scalars().first()
+        if session:
+            session.is_delete = True
+            
+            # Soft delete associated logs
+            stmt_det = update(EmployeeSessionDetection).where(EmployeeSessionDetection.session_id == session_id).values(is_delete=True)
+            await self.db.execute(stmt_det)
+            await self.db.flush()
+            return session.video_path, session.output_video_path
+        return None
+
+
 
