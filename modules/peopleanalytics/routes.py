@@ -1,9 +1,9 @@
-import os
 import uuid
 import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, File, UploadFile, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import FileResponse
+import os
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db
@@ -14,7 +14,6 @@ from modules.peopleanalytics.service import PeopleAnalyticsService
 from modules.peopleanalytics.schema import (
     PeopleAnalyticsSessionResponse,
     VisitorAnalyticsReport,
-    UploadedVideoResponse,
     ProcessVideosRequest,
     SessionDetectedPerson,
     VisitorAttendanceResponse
@@ -34,81 +33,8 @@ def verify_tenant(user: User) -> uuid.UUID:
 
 
 # ==========================================
-# CCTV MULTIPART UPLOADS & JOB RUNNING
+# ANALYSIS SESSION MANAGEMENT
 # ==========================================
-
-@router.post(
-    "/upload",
-    response_model=StandardResponse[List[UploadedVideoResponse]],
-    status_code=status.HTTP_202_ACCEPTED
-)
-async def upload_batch_cctv_footage(
-    files: List[UploadFile] = File(..., description="Select up to 10 video files to upload"),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Uploads up to 10 CCTV videos in a batch, saves them on disk, and records their metadata.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = PeopleAnalyticsService(db)
-    details = await service.upload_video_files(
-        tenant_id=tenant_id,
-        files=files,
-        user_id=current_user.id
-    )
-    return StandardResponse(
-        message=f"Successfully uploaded {len(details)} video file(s).",
-        status=status.HTTP_202_ACCEPTED,
-        data=[UploadedVideoResponse.model_validate(d) for d in details]
-    )
-
-
-@router.get(
-    "/uploads",
-    response_model=StandardResponse[List[UploadedVideoResponse]],
-    status_code=status.HTTP_200_OK
-)
-async def list_uploaded_videos(
-    current_user: User = Depends(require_viewer),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Retrieves all video files uploaded by the active tenant.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = PeopleAnalyticsService(db)
-    videos = await service.get_all_uploaded_videos(tenant_id)
-    return StandardResponse(
-        message=f"Successfully retrieved {len(videos)} uploaded video(s).",
-        status=status.HTTP_200_OK,
-        data=[UploadedVideoResponse.model_validate(v) for v in videos]
-    )
-
-
-@router.delete(
-    "/uploads/{video_id}",
-    response_model=StandardResponse[None],
-    status_code=status.HTTP_200_OK
-)
-async def delete_uploaded_video(
-    video_id: uuid.UUID,
-    current_user: User = Depends(require_viewer),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Deletes the uploaded video metadata from database and physically removes the file from disk.
-    Access is granted to the user who uploaded the video or any tenant admin.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = PeopleAnalyticsService(db)
-    await service.delete_uploaded_video(video_id, tenant_id, current_user)
-    return StandardResponse(
-        message="Uploaded video and physical file deleted successfully.",
-        status=status.HTTP_200_OK,
-        data=None
-    )
-
 
 @router.post(
     "/process",
@@ -122,7 +48,8 @@ async def process_batch_sessions(
 ):
     """
     Registers database sessions and initiates background Celery tasks to process
-    tracking, crossings, and attendance for a list of uploaded CCTV videos.
+    tracking, crossings, and attendance for a list of gallery media items.
+    Each video item must supply a valid gallery_media_id from the shared gallery.
     """
     tenant_id = verify_tenant(current_user)
     service = PeopleAnalyticsService(db)
@@ -210,7 +137,6 @@ async def get_session_detected_people(
     )
 
 
-
 @router.get(
     "/sessions/{session_id}/video",
     status_code=status.HTTP_200_OK
@@ -260,13 +186,14 @@ async def delete_analytics_session(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Deletes the session and physically wipes its input and output video files from disk.
+    Deletes the session and physically wipes its output video file from disk.
+    The source gallery media file is NOT deleted — manage raw files via the gallery module.
     """
     tenant_id = verify_tenant(current_user)
     service = PeopleAnalyticsService(db)
     await service.delete_session(session_id, tenant_id)
     return StandardResponse(
-        message="Analytics session and physical video files deleted successfully.",
+        message="Analytics session and output video files deleted successfully.",
         status=status.HTTP_200_OK,
         data=None
     )

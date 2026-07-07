@@ -5,36 +5,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from database.base import BaseModel
-
-class ActivityMedia(BaseModel):
-    """
-    Stores references to photos and videos uploaded specifically for Activity and Theft detection.
-    """
-    __tablename__ = "activity_media"
-
-    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
-    filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    filepath: Mapped[str] = mapped_column(String(512), nullable=False)  # Path in local storage
-    output_filepath: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)  # Processed output path
-    media_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'photo' | 'video'
-    status: Mapped[str] = mapped_column(String(20), default="pending")    # 'pending' | 'processing' | 'completed' | 'failed'
-
-    configs: Mapped[list["ActivityConfig"]] = relationship(back_populates="activity_media", cascade="all, delete-orphan")
-    alerts: Mapped[list["ActivityAlert"]] = relationship(back_populates="activity_media", cascade="all, delete-orphan")
-
-    @property
-    def config(self) -> Optional["ActivityConfig"]:
-        return self.configs[0] if self.configs else None
-
+from modules.gallery.model import GalleryMedia
 
 class ActivityConfig(BaseModel):
     """
-    Stores safety and security monitoring parameters (like ROI boundary) for an activity media item.
+    Stores safety and security monitoring parameters (like ROI boundary) for a gallery media item.
     """
     __tablename__ = "activity_configs"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
-    activity_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activity_media.id", ondelete="CASCADE"), nullable=False)
+    gallery_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("gallery_media.id", ondelete="CASCADE"), nullable=False)
     
     # Store polygon points as a JSON list of coordinates, e.g. [[100, 150], [200, 150], ...]
     polygon_points: Mapped[Optional[List[List[int]]]] = mapped_column(JSON, nullable=True)
@@ -56,7 +36,7 @@ class ActivityConfig(BaseModel):
     # Selected custom activity labels to track
     selected_activities: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
 
-    activity_media: Mapped["ActivityMedia"] = relationship(back_populates="configs")
+    gallery_media: Mapped["GalleryMedia"] = relationship()
 
 
 class ActivityAlert(BaseModel):
@@ -66,7 +46,7 @@ class ActivityAlert(BaseModel):
     __tablename__ = "activity_alerts"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
-    activity_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activity_media.id", ondelete="CASCADE"), nullable=False)
+    gallery_media_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("gallery_media.id", ondelete="CASCADE"), nullable=False)
     
     # Tracking ID of the person from YOLO tracker
     track_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -86,4 +66,4 @@ class ActivityAlert(BaseModel):
     # Alert severity level: 'info', 'warning', 'critical'
     severity: Mapped[str] = mapped_column(String(20), default="warning")
 
-    activity_media: Mapped["ActivityMedia"] = relationship(back_populates="alerts")
+    gallery_media: Mapped["GalleryMedia"] = relationship()

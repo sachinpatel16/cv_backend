@@ -24,11 +24,11 @@ class ActivityConfigBase(BaseModel):
     )
 
 class ActivityConfigPayload(ActivityConfigBase):
-    activity_media_id: UUID
+    gallery_media_id: UUID
 
 class ActivityConfigResponse(ActivityConfigBase):
     id: UUID
-    activity_media_id: UUID
+    gallery_media_id: UUID
     created_at: datetime
 
     class Config:
@@ -39,15 +39,13 @@ class ActivityProcessPayload(ActivityConfigBase):
     interval: float = Field(1.0, description="Frame sampling interval in seconds")
 
 
-# --- MEDIA SCHEMAS ---
-class ActivityMediaBase(BaseModel):
-    filename: str
-    media_type: str
-
-class ActivityMediaResponse(ActivityMediaBase):
+# --- MEDIA RESPONSE MAPS ---
+class ActivityMediaResponse(BaseModel):
     id: UUID
+    filename: str
     filepath: str
-    output_filepath: Optional[str] = None
+    processed_filepath: Optional[str] = None
+    media_type: str
     status: str
     created_at: datetime
     config: Optional[ActivityConfigResponse] = None
@@ -57,9 +55,9 @@ class ActivityMediaResponse(ActivityMediaBase):
 
 
 class ActivityProcessStatusResponse(BaseModel):
-    media_id: UUID
+    gallery_media_id: UUID
     status: str
-    output_filepath: Optional[str] = None
+    processed_filepath: Optional[str] = None
     config: Optional[ActivityConfigResponse] = None
 
     class Config:
@@ -69,7 +67,7 @@ class ActivityProcessStatusResponse(BaseModel):
 # --- ALERT REPORT SCHEMAS ---
 class ActivityAlertResponse(BaseModel):
     id: UUID
-    activity_media_id: UUID
+    gallery_media_id: UUID
     track_id: Optional[int] = None
     activity_type: str
     timestamp: float

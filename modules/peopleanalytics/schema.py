@@ -77,11 +77,12 @@ class UploadedVideoResponse(BaseModel):
 
 
 class VideoProcessItem(BaseModel):
-    video_path: str = Field(..., description="Unique saved video path")
+    gallery_media_id: str = Field(..., description="UUID of the gallery media item to process")
     line_start: Optional[List[int]] = Field(None, description="Coordinates [x, y] of counting line start")
     line_end: Optional[List[int]] = Field(None, description="Coordinates [x, y] of counting line end")
     similarity_threshold: Optional[float] = Field(None, ge=0.5, le=1.0, description="Optional per-video similarity threshold")
     confidence_threshold: Optional[float] = Field(None, ge=0.1, le=1.0, description="Optional per-video confidence threshold")
+
 
 
 class ProcessVideosRequest(BaseModel):

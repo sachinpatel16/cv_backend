@@ -1,99 +1,69 @@
 import os
 import uuid
 from typing import List, Optional
-from fastapi import UploadFile, HTTPException, status
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from modules.peoplecount.repository import PeopleCountRepository
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
-
-PEOPLECOUNT_MEDIA_DIR = os.path.join("storage", "peoplecount_media")
-PEOPLECOUNT_OUTPUTS_DIR = os.path.join("storage", "peoplecount_outputs")
-
-os.makedirs(PEOPLECOUNT_MEDIA_DIR, exist_ok=True)
-os.makedirs(PEOPLECOUNT_OUTPUTS_DIR, exist_ok=True)
 
 class PeopleCountService:
     def __init__(self, db: AsyncSession):
         self.repo = PeopleCountRepository(db)
         self.db = db
 
-    async def upload_and_process_media(
+    async def trigger_analysis(
         self,
-        files: List[UploadFile],
-        media_type: str,
+        gallery_media_id: uuid.UUID,
         tenant_id: uuid.UUID,
         min_track_frames: int = 300,
         track_buffer: int = 150,
         confidence_threshold: float = 0.35
-    ) -> List[PeopleCountMedia]:
+    ) -> PeopleCountMedia:
         """
-        Uploads photos or videos for people counting, saves them, and schedules a Celery task.
+        Registers a new people counting analysis session on an uploaded gallery media file,
+        and schedules the background tracking task.
         """
-        results = []
-        for file in files:
-            # Deduplicate by filename
-            existing = await self.repo.get_media_by_filename(file.filename, tenant_id)
-            if existing:
-                if existing.status in {"completed", "processing"}:
-                    results.append(existing)
-                    continue
-                else:
-                    # Cleanup old failed/pending file and DB record
-                    if os.path.exists(existing.filepath):
-                        try:
-                            os.remove(existing.filepath)
-                        except Exception:
-                            pass
-                    if existing.processed_filepath and os.path.exists(existing.processed_filepath):
-                        try:
-                            os.remove(existing.processed_filepath)
-                        except Exception:
-                            pass
-                    await self.db.delete(existing)
-                    await self.db.flush()
-
-            # Save media file
-            file_ext = os.path.splitext(file.filename)[1].lower()
-            unique_name = f"{uuid.uuid4()}{file_ext}"
-            filepath = os.path.join(PEOPLECOUNT_MEDIA_DIR, unique_name)
-            
-            content = await file.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
-
-            # Create media record in DB
-            media = await self.repo.create_media(
-                tenant_id=tenant_id,
-                filename=file.filename or unique_name,
-                filepath=filepath,
-                media_type=media_type
+        # Validate that the gallery media file exists and belongs to this tenant
+        from modules.gallery.repository import GalleryRepository
+        gallery_repo = GalleryRepository(self.db)
+        gallery_media = await gallery_repo.get_media_by_id(gallery_media_id, tenant_id)
+        if not gallery_media:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gallery media record not found or access denied."
             )
+
+        # Create an analysis session record in DB
+        analysis = await self.repo.create_analysis_session(
+            tenant_id=tenant_id,
+            gallery_media_id=gallery_media_id
+        )
+        await self.db.commit()
+
+        # Trigger background counting tasks via Celery
+        try:
+            await self.repo.update_media_status(analysis.id, "processing")
             await self.db.commit()
+            
+            from workers.tasks import index_peoplecount_task
+            index_peoplecount_task.delay(
+                str(analysis.id),
+                gallery_media.filepath,
+                gallery_media.media_type,
+                min_track_frames,
+                track_buffer,
+                confidence_threshold
+            )
+        except Exception as e:
+            await self.repo.update_media_status(analysis.id, "failed")
+            await self.db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to submit people count task: {str(e)}"
+            )
 
-            # Trigger background counting tasks via Celery
-            try:
-                await self.repo.update_media_status(media.id, "processing")
-                await self.db.commit()
-                
-                from workers.tasks import index_peoplecount_task
-                index_peoplecount_task.delay(
-                    str(media.id),
-                    filepath,
-                    media_type,
-                    min_track_frames,
-                    track_buffer,
-                    confidence_threshold
-                )
-            except Exception as e:
-                await self.repo.update_media_status(media.id, "failed")
-                await self.db.commit()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to submit people count task for {file.filename}: {str(e)}"
-                )
-
-            results.append(media)
-        return results
+        # Return session with eager loaded gallery media
+        return await self.repo.get_media_by_id(analysis.id, tenant_id)
 
     async def get_all_media(self, tenant_id: uuid.UUID) -> List[PeopleCountMedia]:
         return await self.repo.get_all_media(tenant_id)
@@ -103,7 +73,7 @@ class PeopleCountService:
         if not media:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Media record not found or access denied."
+                detail="Analysis session not found or access denied."
             )
         return media
 
@@ -113,7 +83,7 @@ class PeopleCountService:
         if not media:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Media record not found or access denied."
+                detail="Analysis session not found or access denied."
             )
         return await self.repo.get_results_by_media_id(media_id, tenant_id)
 
@@ -122,20 +92,18 @@ class PeopleCountService:
         if not media:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Media record not found or access denied."
+                detail="Analysis session not found or access denied."
             )
         
-        # Physical cleanup
-        if media.filepath and os.path.exists(media.filepath):
-            try:
-                os.remove(media.filepath)
-            except Exception:
-                pass
-        if media.processed_filepath and os.path.exists(media.processed_filepath):
-            try:
-                os.remove(media.processed_filepath)
-            except Exception:
-                pass
+        # Physical cleanup of processed files associated with this session if it updated GalleryMedia
+        if media.gallery_media and media.gallery_media.processed_filepath:
+            if os.path.exists(media.gallery_media.processed_filepath):
+                try:
+                    os.remove(media.gallery_media.processed_filepath)
+                except Exception:
+                    pass
+            # Clear processed_filepath on gallery media
+            media.gallery_media.processed_filepath = None
 
         await self.repo.delete_media(media_id, tenant_id)
         await self.db.commit()

@@ -37,12 +37,24 @@ from ultralytics import YOLO
 # ─────────────────────────────────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent  # cv_backend/
 
+from shared.utils.model_loader import get_model_path
+
+try:
+    _person_path = get_model_path("smokingdetect", "yolov8n.pt")
+except Exception:
+    _person_path = str(_BASE_DIR / "trained-models" / "yolov8n.pt")
+
+try:
+    _cigarette_path = get_model_path("smokingdetect", "cigarette_best.pt")
+except Exception:
+    _cigarette_path = str(_BASE_DIR / "trained-models" / "cigarette_best.pt")
+
 MODEL_PATHS = {
     # Base YOLOv8 person detector (auto-downloaded by Ultralytics if absent)
-    "person": str(_BASE_DIR / "trained-models" / "yolov8n.pt"),
+    "person": _person_path,
 
     # Custom YOLOv8 cigarette detector (set to None to use colour heuristics)
-    "cigarette": str(_BASE_DIR / "trained-models" / "cigarette_best.pt"),
+    "cigarette": _cigarette_path,
 
     # Output storage roots (override if needed)
     "frames_dir": str(_BASE_DIR / "storage" / "smoking_frames"),

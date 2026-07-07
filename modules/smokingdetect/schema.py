@@ -3,15 +3,14 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, List
 
-
 # ---------------------------------------------------------------------------
 # Request schemas
 # ---------------------------------------------------------------------------
 
-class SubmitVideoRequest(BaseModel):
-    """Query/form parameters for the video upload endpoint."""
+class SmokingAnalyzeRequest(BaseModel):
+    """Payload to trigger smoking detection on a gallery media item."""
+    gallery_media_id: UUID
     interval: float = 1.0
-    save_frames: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +41,7 @@ class SmokingEventOut(BaseModel):
 class SmokingSessionOut(BaseModel):
     """Full session response including all detected events (used for status / detail endpoints)."""
     id: UUID
+    gallery_media_id: Optional[UUID] = None
     status: str
     overall_status: Optional[str] = None
     video_out_path: Optional[str] = None
@@ -76,6 +76,7 @@ class SmokingSessionUserOut(BaseModel):
 class SmokingSessionHistoryOut(BaseModel):
     """Summary row returned by the /sessions/history endpoint."""
     id: UUID
+    gallery_media_id: Optional[UUID] = None
     status: str
     overall_status: Optional[str] = None
     interval: float

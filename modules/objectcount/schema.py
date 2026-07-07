@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -22,10 +22,7 @@ class ObjectCountResultResponse(BaseModel):
 
 class ObjectCountMediaResponse(BaseModel):
     id: UUID
-    filename: str
-    filepath: str
-    processed_filepath: Optional[str] = None
-    media_type: str
+    gallery_media_id: UUID
     status: str
     classify_gender: bool
     classify_vehicle: bool
@@ -38,6 +35,24 @@ class ObjectCountMediaResponse(BaseModel):
     progress_percentage: int = 0
     created_at: datetime
 
+    # Populated from gallery_media relationship
+    filename: Optional[str] = None
+    filepath: Optional[str] = None
+    processed_filepath: Optional[str] = None
+    media_type: Optional[str] = None
+
+    @classmethod
+    def model_validate(cls, obj, *args, **kwargs):
+        instance = super().model_validate(obj, *args, **kwargs)
+        # Handle lazy/eager loading of gallery_media relationship
+        gallery_media = getattr(obj, "gallery_media", None)
+        if gallery_media:
+            instance.filename = gallery_media.filename
+            instance.filepath = gallery_media.filepath
+            instance.processed_filepath = gallery_media.processed_filepath
+            instance.media_type = gallery_media.media_type
+        return instance
+
     class Config:
         from_attributes = True
 
@@ -47,6 +62,7 @@ class ObjectCountMediaDetailResponse(ObjectCountMediaResponse):
 
 
 class ObjectCountAnalyzeRequest(BaseModel):
+    gallery_media_id: UUID
     classes_to_track: Optional[List[str]] = None
     classify_gender: bool = False
     classify_vehicle: bool = False

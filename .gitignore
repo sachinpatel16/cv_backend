@@ -137,7 +137,8 @@ storage/
 *.db
 *.sqlite
 
-# Large Model Files
+# Model and Weights Storage
+models/
+trained-models/
+*.pt
 *.pb
-models/activity/frozen_inference_graph.pb
-models/objectcount/

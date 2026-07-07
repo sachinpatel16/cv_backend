@@ -1,6 +1,6 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, File, UploadFile, Form, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db
@@ -11,7 +11,8 @@ from modules.peoplecount.service import PeopleCountService
 from modules.peoplecount.schema import (
     PeopleCountMediaResponse,
     PeopleCountMediaDetailResponse,
-    PeopleCountResultResponse
+    PeopleCountResultResponse,
+    PeopleCountAnalyzeRequest
 )
 
 router = APIRouter(prefix="/peoplecount", tags=["People Count & Video Tracking"])
@@ -26,44 +27,32 @@ def verify_tenant(user: User) -> uuid.UUID:
     return user.tenant_id
 
 @router.post(
-    "/media",
-    response_model=StandardResponse[List[PeopleCountMediaResponse]],
-    status_code=status.HTTP_201_CREATED
+    "/analyze",
+    response_model=StandardResponse[PeopleCountMediaResponse],
+    status_code=status.HTTP_200_OK
 )
-async def upload_and_count_media(
-    files: List[UploadFile] = File(..., description="The photo(s) or video file(s) to upload and perform people counting on"),
-    media_type: str = Form(..., description="Type of media file: 'photo' or 'video'"),
-    min_track_frames: int = Form(300, description="Minimum frames a track must be active to be counted. Default: 300"),
-    track_buffer: int = Form(150, description="Number of frames to keep a lost track in memory. Default: 150"),
-    confidence_threshold: float = Form(0.35, description="Confidence threshold for detections. Default: 0.35"),
+async def analyze_people_media(
+    configs: PeopleCountAnalyzeRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Uploads photos/videos, saves them, and indexes people count metrics in the background.
+    Triggers people counting and tracking on a gallery media item by its gallery_media_id.
     """
     tenant_id = verify_tenant(current_user)
-    
-    if media_type not in {"photo", "video"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid media_type. Supported options are 'photo' or 'video'."
-        )
-
     service = PeopleCountService(db)
-    media_list = await service.upload_and_process_media(
-        files=files,
-        media_type=media_type,
+    media = await service.trigger_analysis(
+        gallery_media_id=configs.gallery_media_id,
         tenant_id=tenant_id,
-        min_track_frames=min_track_frames,
-        track_buffer=track_buffer,
-        confidence_threshold=confidence_threshold
+        min_track_frames=configs.min_track_frames,
+        track_buffer=configs.track_buffer,
+        confidence_threshold=configs.confidence_threshold
     )
     
-    media_data = [PeopleCountMediaResponse.model_validate(m) for m in media_list]
+    media_data = PeopleCountMediaResponse.model_validate(media)
     return StandardResponse(
-        message=f"Successfully queued {len(media_data)} media file(s) for people counting.",
-        status=status.HTTP_201_CREATED,
+        message="People counting and tracking triggered successfully.",
+        status=status.HTTP_200_OK,
         data=media_data
     )
 

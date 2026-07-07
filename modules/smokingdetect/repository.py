@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from modules.smokingdetect.model import SmokingSession, SmokingEvent
-
+from modules.gallery.model import GalleryMedia
 
 class SmokingDetectRepository:
     def __init__(self, db: AsyncSession):
@@ -20,14 +20,14 @@ class SmokingDetectRepository:
         db: AsyncSession,
         user_id: Optional[uuid.UUID],
         tenant_id: str,
-        media_id: Optional[uuid.UUID],
+        gallery_media_id: Optional[uuid.UUID],
         interval: float,
     ) -> SmokingSession:
         """Create a new smoking detection session in 'pending' state."""
         session = SmokingSession(
             tenant_id=tenant_id,
             user_id=user_id,
-            media_id=media_id,
+            gallery_media_id=gallery_media_id,
             interval=interval,
             status="pending",
             overall_status=None,
@@ -43,10 +43,14 @@ class SmokingDetectRepository:
         tenant_id: str,
     ) -> Optional[SmokingSession]:
         """Fetch a single session by ID, scoped to a tenant."""
-        stmt = select(SmokingSession).where(
-            SmokingSession.id == session_id,
-            SmokingSession.tenant_id == tenant_id,
-            SmokingSession.is_delete == False,
+        stmt = (
+            select(SmokingSession)
+            .options(selectinload(SmokingSession.gallery_media))
+            .where(
+                SmokingSession.id == session_id,
+                SmokingSession.tenant_id == tenant_id,
+                SmokingSession.is_delete == False,
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
@@ -59,7 +63,10 @@ class SmokingDetectRepository:
         """Fetch a session by ID with events eagerly loaded, scoped to tenant."""
         stmt = (
             select(SmokingSession)
-            .options(selectinload(SmokingSession.events))
+            .options(
+                selectinload(SmokingSession.events),
+                selectinload(SmokingSession.gallery_media)
+            )
             .where(
                 SmokingSession.id == session_id,
                 SmokingSession.tenant_id == tenant_id,
@@ -75,7 +82,7 @@ class SmokingDetectRepository:
         user_id: Optional[uuid.UUID] = None,
     ) -> List[SmokingSession]:
         """
-        Fetch all non-deleted sessions for a tenant, eagerly loading the user relationship.
+        Fetch all non-deleted sessions for a tenant, eagerly loading the user and gallery_media relationship.
         Optionally filter by user_id for non-admin callers.
         """
         stmt = (
@@ -83,6 +90,7 @@ class SmokingDetectRepository:
             .options(
                 selectinload(SmokingSession.user),
                 selectinload(SmokingSession.events),
+                selectinload(SmokingSession.gallery_media),
             )
             .where(
                 SmokingSession.tenant_id == tenant_id,
@@ -126,13 +134,7 @@ class SmokingDetectRepository:
         event_dict: dict,
     ) -> SmokingEvent:
         """
-        Persist a single detection result (dict from SmokingDetector.analyse_video)
-        as a SmokingEvent row.
-
-        Expected keys in event_dict:
-            timestamp, person_id, status, signals.score, signals.cig,
-            signals.tip, signals.smoke, signals.tip_ratio, signals.smoke_area,
-            signals.person_box, signals.cig_box
+        Persist a single detection result as a SmokingEvent row.
         """
         signals = event_dict.get("signals", {})
         event = SmokingEvent(
@@ -188,4 +190,3 @@ class SmokingDetectRepository:
             )
             await self.db.flush()
         return session
-
