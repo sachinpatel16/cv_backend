@@ -6,7 +6,8 @@ from sqlalchemy import select
 
 from workers.celery import celery_app
 from database.session import SessionLocal
-from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
+from modules.gallery.model import GalleryMedia
+from modules.activity.model import ActivityConfig, ActivityAlert
 from modules.activity.repository import ActivityRepository
 from services.ai.activity_detection import activity_detection_service
 from workers.utils import run_async
@@ -30,9 +31,9 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
             # 1. Fetch media
             media = await repo.get_activity_media_by_id(media_id, media_id) # bypass tenant scope by using media_id as tenant_id in Celery
             # Wait, Celery bypasses tenant checks by loading directly, let's fetch by simple ID:
-            stmt = select(ActivityMedia).where(
-                ActivityMedia.id == media_id,
-                ActivityMedia.is_delete == False
+            stmt = select(GalleryMedia).where(
+                GalleryMedia.id == media_id,
+                GalleryMedia.is_delete == False
             )
             res = await db.execute(stmt)
             media = res.scalars().first()
@@ -45,7 +46,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
 
             # 2. Fetch config
             stmt_cfg = select(ActivityConfig).where(
-                ActivityConfig.activity_media_id == media.id,
+                ActivityConfig.gallery_media_id == media.id,
                 ActivityConfig.is_delete == False
             )
             res_cfg = await db.execute(stmt_cfg)
@@ -199,7 +200,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                             
                             await repo.create_activity_alert(
                                 tenant_id=media.tenant_id,
-                                media_id=media.id,
+                                gallery_media_id=media.id,
                                 track_id=None,
                                 activity_type=label,
                                 timestamp=0.0,
@@ -248,7 +249,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                         # Save the alert in database
                         await repo.create_activity_alert(
                             tenant_id=media.tenant_id,
-                            media_id=media.id,
+                            gallery_media_id=media.id,
                             track_id=None,
                             activity_type=activity_type,
                             timestamp=timestamp,
@@ -264,7 +265,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                     except Exception as e:
                         print(f"Video transcoding failed (falling back to raw mp4v): {e}")
 
-                media.output_filepath = output_filepath
+                media.processed_filepath = output_filepath
                 media.status = "completed"
                 await db.commit()
 

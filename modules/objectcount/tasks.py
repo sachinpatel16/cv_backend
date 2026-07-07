@@ -98,14 +98,15 @@ def index_objectcount_task(
             
             repo = ObjectCountRepository(db)
             
-            # Load weights from the dedicated objectcount subfolder
-            weights_path = os.path.join("models", "objectcount", "yolo12m.pt")
-            if not os.path.exists(weights_path):
-                weights_path = os.path.join("models", "objectcount", "yolo12n.pt")
-            if not os.path.exists(weights_path):
-                weights_path = os.path.join("models", "objectcount", "yolo26n.pt")
-            if not os.path.exists(weights_path):
-                weights_path = os.path.join("models", "objectcount", "yolov8n.pt")
+            # Load weights using self-healing loader
+            from shared.utils.model_loader import get_model_path
+            try:
+                weights_path = get_model_path("objectcount", "yolo12m.pt")
+            except Exception:
+                try:
+                    weights_path = get_model_path("objectcount", "yolo12n.pt")
+                except Exception:
+                    weights_path = get_model_path("objectcount", "yolov8n.pt")
 
             # Determine dynamic execution device
             requested_device = configs.get("device")
@@ -333,9 +334,6 @@ def index_objectcount_task(
                     average_objects_count=float(total_detected),
                     video_duration_seconds=0.0,
                     processed_filepath=processed_filepath,
-                    classify_gender=classify_gender,
-                    classify_vehicle=classify_vehicle,
-                    classes_to_track=classes_to_track,
                     report_summary=report_summary
                 )
                 await db.commit()
@@ -828,9 +826,6 @@ def index_objectcount_task(
                     average_objects_count=avg_objects,
                     video_duration_seconds=video_duration,
                     processed_filepath=processed_filepath,
-                    classify_gender=classify_gender,
-                    classify_vehicle=classify_vehicle,
-                    classes_to_track=classes_to_track,
                     report_summary=report_summary
                 )
                 await db.commit()

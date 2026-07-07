@@ -66,9 +66,10 @@ class ActivityDetectionService:
 
     def _lazy_init(self):
         if self.model is None:
-            # Loads yolov8n-pose.pt (will auto-download if missing)
-            self.model = YOLO("yolov26n-pose.pt")
-            # self.model = YOLO("yolov26n-pose.pt")
+            # Loads yolov8n-pose.pt using self-healing loader
+            from shared.utils.model_loader import get_model_path
+            weights_path = get_model_path("activity", "yolov8n-pose.pt")
+            self.model = YOLO(weights_path)
 
     def _lazy_init_tf(self):
         if self.tf_sess is None:

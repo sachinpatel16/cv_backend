@@ -1,22 +1,21 @@
 import uuid
 from typing import List, Optional
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
+from modules.gallery.model import GalleryMedia
 
 class PeopleCountRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_media(
-        self, tenant_id: uuid.UUID, filename: str, filepath: str, media_type: str
+    async def create_analysis_session(
+        self, tenant_id: uuid.UUID, gallery_media_id: uuid.UUID
     ) -> PeopleCountMedia:
-        """Create a new media record for people counting."""
+        """Create a new people counting analysis session on a gallery media item."""
         media = PeopleCountMedia(
             tenant_id=tenant_id,
-            filename=filename,
-            filepath=filepath,
-            media_type=media_type,
+            gallery_media_id=gallery_media_id,
             status="pending"
         )
         self.db.add(media)
@@ -24,21 +23,11 @@ class PeopleCountRepository:
         return media
 
     async def get_media_by_id(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[PeopleCountMedia]:
-        """Fetch media by ID, scoped to a tenant."""
-        stmt = select(PeopleCountMedia).where(
-            PeopleCountMedia.id == media_id,
-            PeopleCountMedia.tenant_id == tenant_id,
-            PeopleCountMedia.is_delete == False
-        )
-        result = await self.db.execute(stmt)
-        return result.scalars().first()
-
-    async def get_media_with_results(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[PeopleCountMedia]:
-        """Fetch media by ID with tracking results eagerly loaded, scoped to a tenant."""
+        """Fetch analysis session by ID, scoped to a tenant, loading gallery_media."""
         from sqlalchemy.orm import selectinload
         stmt = (
             select(PeopleCountMedia)
-            .options(selectinload(PeopleCountMedia.results))
+            .options(selectinload(PeopleCountMedia.gallery_media))
             .where(
                 PeopleCountMedia.id == media_id,
                 PeopleCountMedia.tenant_id == tenant_id,
@@ -48,20 +37,30 @@ class PeopleCountRepository:
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
-    async def get_media_by_filename(self, filename: str, tenant_id: uuid.UUID) -> Optional[PeopleCountMedia]:
-        """Fetch media by filename and tenant."""
-        stmt = select(PeopleCountMedia).where(
-            PeopleCountMedia.filename == filename,
-            PeopleCountMedia.tenant_id == tenant_id,
-            PeopleCountMedia.is_delete == False
+    async def get_media_with_results(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[PeopleCountMedia]:
+        """Fetch analysis session by ID with tracking results and gallery_media eagerly loaded, scoped to a tenant."""
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(PeopleCountMedia)
+            .options(
+                selectinload(PeopleCountMedia.results),
+                selectinload(PeopleCountMedia.gallery_media)
+            )
+            .where(
+                PeopleCountMedia.id == media_id,
+                PeopleCountMedia.tenant_id == tenant_id,
+                PeopleCountMedia.is_delete == False
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
     async def get_all_media(self, tenant_id: uuid.UUID) -> List[PeopleCountMedia]:
-        """Fetch all non-deleted media for a tenant."""
+        """Fetch all non-deleted analysis sessions for a tenant, loading gallery_media."""
+        from sqlalchemy.orm import selectinload
         stmt = (
             select(PeopleCountMedia)
+            .options(selectinload(PeopleCountMedia.gallery_media))
             .where(
                 PeopleCountMedia.tenant_id == tenant_id,
                 PeopleCountMedia.is_delete == False
@@ -72,7 +71,7 @@ class PeopleCountRepository:
         return list(result.scalars().all())
 
     async def delete_media(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[PeopleCountMedia]:
-        """Soft delete media and associated results."""
+        """Soft delete analysis session and associated results."""
         stmt = select(PeopleCountMedia).where(
             PeopleCountMedia.id == media_id,
             PeopleCountMedia.tenant_id == tenant_id,
@@ -110,7 +109,7 @@ class PeopleCountRepository:
         video_duration_seconds: Optional[float] = None,
         processed_filepath: Optional[str] = None
     ) -> None:
-        """Update metrics and status when analysis is complete."""
+        """Update metrics and status when analysis is complete, saving processed_filepath to GalleryMedia."""
         stmt = (
             update(PeopleCountMedia)
             .where(PeopleCountMedia.id == media_id)
@@ -119,11 +118,22 @@ class PeopleCountRepository:
                 total_people_count=total_people_count,
                 peak_people_count=peak_people_count,
                 average_people_count=average_people_count,
-                video_duration_seconds=video_duration_seconds,
-                processed_filepath=processed_filepath
+                video_duration_seconds=video_duration_seconds
             )
         )
         await self.db.execute(stmt)
+
+        if processed_filepath:
+            session_stmt = select(PeopleCountMedia.gallery_media_id).where(PeopleCountMedia.id == media_id)
+            res = await self.db.execute(session_stmt)
+            gallery_media_id = res.scalar()
+            if gallery_media_id:
+                gallery_stmt = (
+                    update(GalleryMedia)
+                    .where(GalleryMedia.id == gallery_media_id)
+                    .values(processed_filepath=processed_filepath)
+                )
+                await self.db.execute(gallery_stmt)
 
     async def create_result(
         self,
@@ -151,6 +161,11 @@ class PeopleCountRepository:
         await self.db.flush()
         return result
 
+    async def clear_results_by_media_id(self, media_id: uuid.UUID) -> None:
+        """Delete previous results before starting a new analysis."""
+        stmt = delete(PeopleCountResult).where(PeopleCountResult.media_id == media_id)
+        await self.db.execute(stmt)
+
     async def get_results_by_media_id(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> List[PeopleCountResult]:
         """Fetch all results for a media, verifying tenant scoping."""
         stmt = (
@@ -166,29 +181,3 @@ class PeopleCountRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
-
-    async def bulk_delete_media_sources(self, tenant_id: uuid.UUID) -> List[tuple[str, Optional[str]]]:
-        """Soft delete all media sources and return file paths for physical deletion."""
-        stmt = select(PeopleCountMedia).where(
-            PeopleCountMedia.tenant_id == tenant_id,
-            PeopleCountMedia.is_delete == False
-        )
-        result = await self.db.execute(stmt)
-        media_sources = list(result.scalars().all())
-        
-        paths = []
-        for media in media_sources:
-            media.is_delete = True
-            paths.append((media.filepath, media.processed_filepath))
-            
-        if media_sources:
-            media_ids = [m.id for m in media_sources]
-            stmt_results = (
-                update(PeopleCountResult)
-                .where(PeopleCountResult.media_id.in_(media_ids))
-                .values(is_delete=True)
-            )
-            await self.db.execute(stmt_results)
-            await self.db.flush()
-            
-        return paths

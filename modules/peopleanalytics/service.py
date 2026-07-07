@@ -1,19 +1,15 @@
 import os
 import uuid
 from typing import List, Optional
-from fastapi import UploadFile, HTTPException, status
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.peopleanalytics.repository import PeopleAnalyticsRepository
-from modules.peopleanalytics.model import PeopleAnalyticsSession, EmployeeAttendanceLog, UploadedVideo
+from modules.peopleanalytics.model import PeopleAnalyticsSession, EmployeeAttendanceLog
 from modules.peopleanalytics.schema import VisitorAnalyticsReport, VideoProcessItem, SessionDetectedPerson, FirstTimeVisitorDetail
 from modules.users.model import User
 
-ANALYTICS_INPUTS_DIR = os.path.join("storage", "people_analytics_inputs")
 ANALYTICS_OUTPUTS_DIR = os.path.join("storage", "people_analytics_outputs")
-
-# Ensure storage directories exist
-os.makedirs(ANALYTICS_INPUTS_DIR, exist_ok=True)
 os.makedirs(ANALYTICS_OUTPUTS_DIR, exist_ok=True)
 
 class PeopleAnalyticsService:
@@ -22,86 +18,8 @@ class PeopleAnalyticsService:
         self.db = db
 
     # ==========================================
-    # BATCH CCTV ANALYTICS JOBS & UPLOADS
+    # ANALYTICS SESSIONS — gallery-based
     # ==========================================
-
-    async def upload_video_files(
-        self,
-        tenant_id: uuid.UUID,
-        files: List[UploadFile],
-        user_id: Optional[uuid.UUID] = None
-    ) -> List[UploadedVideo]:
-        if len(files) > 10:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="You can upload a maximum of 10 files in a single batch request."
-            )
-
-        uploaded_records = []
-
-        for file in files:
-            original_name = file.filename or ""
-            # Prevent duplicate uploads
-            existing_video = await self.repo.get_uploaded_video_by_name(tenant_id, original_name)
-            if existing_video:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{original_name}' has already been uploaded."
-                )
-
-            file_ext = os.path.splitext(original_name)[1].lower()
-            unique_name = f"{uuid.uuid4()}{file_ext}"
-            
-            user_inputs_dir = os.path.join(ANALYTICS_INPUTS_DIR, str(user_id)) if user_id else ANALYTICS_INPUTS_DIR
-            os.makedirs(user_inputs_dir, exist_ok=True)
-            filepath = os.path.join(user_inputs_dir, unique_name)
-
-            # Save media file
-            content = await file.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
-
-            # Write to database
-            uv = await self.repo.create_uploaded_video(
-                tenant_id=tenant_id,
-                original_name=original_name,
-                saved_path=filepath,
-                user_id=user_id
-            )
-            uploaded_records.append(uv)
-
-        await self.db.commit()
-        return uploaded_records
-
-    async def get_all_uploaded_videos(self, tenant_id: uuid.UUID) -> List[UploadedVideo]:
-        return await self.repo.get_all_uploaded_videos(tenant_id)
-
-    async def delete_uploaded_video(self, video_id: uuid.UUID, tenant_id: uuid.UUID, current_user: User) -> None:
-        video = await self.repo.get_uploaded_video_by_id(video_id, tenant_id)
-        if not video:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Uploaded video not found or unauthorized access."
-            )
-
-        # Check ownership: allowed if user is admin/superadmin OR if they are the owner of the video (matching user_id or saved_path subdirectory)
-        is_owner = (video.user_id == current_user.id) or (str(current_user.id) in video.saved_path)
-        is_admin = current_user.role in ["admin", "superadmin"]
-
-        if not (is_owner or is_admin):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to delete this video."
-            )
-
-        await self.repo.soft_delete_uploaded_video(video)
-
-        if video.saved_path and os.path.exists(video.saved_path):
-            try:
-                os.remove(video.saved_path)
-            except Exception:
-                pass
-        await self.db.commit()
 
     async def create_and_start_sessions(
         self,
@@ -113,39 +31,43 @@ class PeopleAnalyticsService:
         global_confidence_threshold: float = 0.3,
         user_id: Optional[uuid.UUID] = None
     ) -> List[PeopleAnalyticsSession]:
-        # Validate all files exist on disk and belong to this tenant's module
+        # Validate all gallery media IDs and resolve file paths
+        from modules.gallery.repository import GalleryRepository
+        gallery_repo = GalleryRepository(self.db)
+
+        resolved_items = []
         for item in videos:
-            filepath = item.video_path
-            if not os.path.exists(filepath):
+            gallery_media_id = uuid.UUID(item.gallery_media_id)
+            gallery_media = await gallery_repo.get_media_by_id(gallery_media_id, tenant_id)
+            if not gallery_media:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Gallery media '{item.gallery_media_id}' not found or access denied."
+                )
+            if gallery_media.media_type != "video":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{filepath}' does not exist on server storage."
+                    detail=f"Gallery media '{item.gallery_media_id}' is not a video file."
                 )
-            if "people_analytics_inputs" not in filepath:
+            if not os.path.exists(gallery_media.filepath):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{filepath}' is not a valid People Analytics video."
+                    detail=f"Gallery media file does not exist on server storage: '{gallery_media.filepath}'."
                 )
-            # Check tenant ownership in DB
-            existing_video = await self.repo.get_uploaded_video_by_path(tenant_id, filepath)
-            if not existing_video:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Unauthorized access or invalid video file: '{filepath}'"
-                )
+            resolved_items.append((item, gallery_media))
 
         sessions = []
 
-        for item in videos:
-            filepath = item.video_path
-            
+        for item, gallery_media in resolved_items:
+            filepath = gallery_media.filepath
+
             # Determine parameters (local override or global fallback)
             line_start = item.line_start if item.line_start is not None else global_line_start
             line_end = item.line_end if item.line_end is not None else global_line_end
             similarity_threshold = item.similarity_threshold if item.similarity_threshold is not None else global_similarity_threshold
             confidence_threshold = item.confidence_threshold if item.confidence_threshold is not None else global_confidence_threshold
 
-            video_name = os.path.basename(filepath)
+            video_name = gallery_media.filename
             # Register database session
             session = await self.repo.create_analytics_session(
                 tenant_id=tenant_id,
@@ -170,7 +92,7 @@ class PeopleAnalyticsService:
                 confidence_threshold,
                 str(user_id) if user_id else None
             )
-            
+
             sessions.append(session)
 
         return sessions

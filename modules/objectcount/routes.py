@@ -1,6 +1,6 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, File, UploadFile, Form, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.session import get_db
@@ -27,59 +27,22 @@ def verify_tenant(user: User) -> uuid.UUID:
     return user.tenant_id
 
 @router.post(
-    "/media",
-    response_model=StandardResponse[List[ObjectCountMediaResponse]],
-    status_code=status.HTTP_201_CREATED
-)
-async def upload_object_media(
-    files: List[UploadFile] = File(..., description="The photo(s) or video file(s) to upload"),
-    media_type: str = Form(..., description="Type of media file: 'photo' or 'video'"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Uploads photos/videos and saves them. Media is initially in 'pending' status until analyze is triggered.
-    """
-    tenant_id = verify_tenant(current_user)
-    
-    if media_type not in {"photo", "video"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid media_type. Supported options are 'photo' or 'video'."
-        )
-
-    service = ObjectCountService(db)
-    media_list = await service.upload_media(
-        files=files,
-        media_type=media_type,
-        tenant_id=tenant_id
-    )
-    
-    media_data = [ObjectCountMediaResponse.model_validate(m) for m in media_list]
-    return StandardResponse(
-        message=f"Successfully uploaded {len(media_data)} media file(s).",
-        status=status.HTTP_201_CREATED,
-        data=media_data
-    )
-
-@router.post(
-    "/media/{media_id}/analyze",
+    "/analyze",
     response_model=StandardResponse[ObjectCountMediaResponse],
     status_code=status.HTTP_200_OK
 )
 async def analyze_object_media(
-    media_id: uuid.UUID,
     configs: ObjectCountAnalyzeRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Triggers object tracking and classification on the previously uploaded media.
+    Triggers object tracking and classification on a gallery media item by its gallery_media_id.
     """
     tenant_id = verify_tenant(current_user)
     service = ObjectCountService(db)
     media = await service.trigger_analysis(
-        media_id=media_id,
+        gallery_media_id=configs.gallery_media_id,
         tenant_id=tenant_id,
         configs=configs
     )

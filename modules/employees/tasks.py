@@ -76,7 +76,10 @@ def process_employee_attendance_video_task(
                 employee_cache = await get_cached_employee_embeddings(db, session.tenant_id)
 
                 from configs.base import settings
-                model = YOLO(settings.YOLO_MODEL)
+                from shared.utils.model_loader import get_model_path
+                model_filename = os.path.basename(settings.YOLO_MODEL)
+                weights_path = get_model_path("attendance", model_filename)
+                model = YOLO(weights_path)
                 tracker = sv.ByteTrack(
                     frame_rate=int(fps),
                     lost_track_buffer=int(fps * 10)  # Keep lost tracks in memory for up to 10 seconds (default 30 frames)

@@ -1,7 +1,7 @@
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, File, UploadFile, Form, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from modules.smokingdetect.schema import (
     SmokingSessionOut,
     SmokingEventOut,
     SmokingSessionHistoryOut,
+    SmokingAnalyzeRequest,
 )
 
 router = APIRouter(prefix="/smokingdetect", tags=["Smoking Detection"])
@@ -34,33 +35,31 @@ def _verify_tenant(user: User) -> str:
 
 
 # ---------------------------------------------------------------------------
-# POST /smokingdetect/upload
+# POST /smokingdetect/analyze
 # ---------------------------------------------------------------------------
 
 @router.post(
-    "/upload",
+    "/analyze",
     response_model=StandardResponse[SmokingSessionOut],
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def upload_video_for_analysis(
-    file: UploadFile = File(..., description="Video file to analyse for smoking detection"),
-    interval: float = Form(1.0, ge=0.1, description="Frame sampling interval in seconds (default: 1.0)"),
+async def trigger_smoking_analysis(
+    configs: SmokingAnalyzeRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Upload a video for background smoking detection analysis.
+    Trigger a background smoking detection analysis on a gallery media item by its gallery_media_id.
 
-    Saves the video to storage, creates a session record in 'pending' status,
-    and dispatches a Celery task.  Returns 202 immediately so the caller can
-    poll `/sessions/{id}/status` for progress.
+    Creates a session record in 'pending' status and dispatches a Celery task.
+    Returns 202 immediately so the caller can poll `/sessions/{id}/status` for progress.
     """
     tenant_id = _verify_tenant(current_user)
 
     service = SmokingDetectService(db)
-    session = await service.submit_video(
-        file=file,
-        interval=interval,
+    session = await service.trigger_analysis(
+        gallery_media_id=configs.gallery_media_id,
+        interval=configs.interval,
         tenant_id=tenant_id,
         user_id=current_user.id,
     )
@@ -107,6 +106,7 @@ async def list_sessions_history(
         history_data.append(
             SmokingSessionHistoryOut(
                 id=s.id,
+                gallery_media_id=s.gallery_media_id,
                 status=s.status,
                 overall_status=s.overall_status,
                 interval=s.interval,
@@ -256,4 +256,3 @@ async def delete_smoking_session(
         status=status.HTTP_200_OK,
         data=None,
     )
-

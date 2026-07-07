@@ -4,6 +4,7 @@ from sqlalchemy import String, Integer, Float, ForeignKey, Boolean, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.base import BaseModel
 from modules.users.model import User
+from modules.gallery.model import GalleryMedia
 
 
 class SmokingSession(BaseModel):
@@ -17,7 +18,10 @@ class SmokingSession(BaseModel):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    media_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    gallery_media_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("gallery_media.id", ondelete="SET NULL"), nullable=True
+    )
+
 
     # Job lifecycle status: pending | processing | completed | failed
     status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
@@ -33,6 +37,7 @@ class SmokingSession(BaseModel):
 
     # Relationships
     user: Mapped[Optional["User"]] = relationship()
+    gallery_media: Mapped[Optional["GalleryMedia"]] = relationship()
     events: Mapped[List["SmokingEvent"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )

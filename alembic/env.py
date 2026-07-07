@@ -29,6 +29,8 @@ from modules.users.model import User
 from modules.permissions.model import UserPermission
 from modules.peoplefind.model import MediaSource, FaceEmbedding, FaceSearchSession, FaceSearchResult
 from modules.employees.model import Employee, EmployeeEmbedding
+from modules.gallery.model import GalleryMedia
+
 from modules.peopleanalytics.model import (
     UploadedVideo,
     EmployeeAttendanceLog,
@@ -41,10 +43,10 @@ from modules.peopleanalytics.model import (
 )
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
-from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
+from modules.activity.model import ActivityConfig, ActivityAlert
 from modules.peoplecount.model import PeopleCountMedia, PeopleCountResult
 from modules.objectcount.model import ObjectCountMedia, ObjectCountResult
-from modules.activity.model import ActivityMedia, ActivityConfig, ActivityAlert
+from modules.activity.model import ActivityConfig, ActivityAlert
 
 from modules.smokingdetect.model import SmokingSession, SmokingEvent
 

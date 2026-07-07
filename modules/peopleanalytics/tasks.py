@@ -81,7 +81,10 @@ def process_people_analytics_task(
 
                 # Instantiate visual tools
                 from configs.base import settings
-                model = YOLO(settings.YOLO_MODEL)
+                from shared.utils.model_loader import get_model_path
+                model_filename = os.path.basename(settings.YOLO_MODEL)
+                weights_path = get_model_path("attendance", model_filename)
+                model = YOLO(weights_path)
 
                 if is_image:
                     await _process_image_job(

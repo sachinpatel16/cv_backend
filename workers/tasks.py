@@ -322,12 +322,9 @@ def index_peoplecount_task(
             
             repo = PeopleCountRepository(db)
             
-            # Load weights (prefer yolo12n.pt for high accuracy and performance)
-            weights_path = os.path.join("models", "yolo12n.pt")
-            if not os.path.exists(weights_path):
-                weights_path = os.path.join("storage", "yolo26n.pt")
-            if not os.path.exists(weights_path):
-                weights_path = "yolov8n.pt"
+            # Load weights using self-healing loader
+            from shared.utils.model_loader import get_model_path
+            weights_path = get_model_path("peoplecount", "yolo12n.pt")
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model = YOLO(weights_path)

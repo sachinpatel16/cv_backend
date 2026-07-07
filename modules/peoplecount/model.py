@@ -2,18 +2,18 @@ import uuid
 from sqlalchemy import String, Integer, Float, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.base import BaseModel
+from modules.gallery.model import GalleryMedia
 
 class PeopleCountMedia(BaseModel):
     """
-    Stores references to uploaded video or photo files for people counting.
+    Represents a people counting analysis session on a gallery media item.
     """
     __tablename__ = "people_count_media"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
-    filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    filepath: Mapped[str] = mapped_column(String(512), nullable=False)  # Path to local file
-    processed_filepath: Mapped[str | None] = mapped_column(String(512), nullable=True)  # Path to processed/annotated file
-    media_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'photo' | 'video'
+    gallery_media_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("gallery_media.id", ondelete="CASCADE"), nullable=False
+    )
     status: Mapped[str] = mapped_column(String(20), default="pending")    # 'pending' | 'processing' | 'completed' | 'failed'
     
     total_people_count: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Total unique people counted
@@ -21,7 +21,8 @@ class PeopleCountMedia(BaseModel):
     average_people_count: Mapped[float | None] = mapped_column(Float, nullable=True) # Average people count per frame
     video_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True) # Duration of the video
     
-    # Relationship to tracked people results
+    # Relationships
+    gallery_media: Mapped["GalleryMedia"] = relationship()
     results: Mapped[list["PeopleCountResult"]] = relationship(
         back_populates="media", cascade="all, delete-orphan"
     )
