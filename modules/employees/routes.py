@@ -225,8 +225,9 @@ async def mark_group_photo_attendance(
     """
     tenant_id = verify_tenant(current_user)
     service = EmployeeService(db)
-    logs, annotated_image_path = await service.process_group_photo_attendance(
+    logs, annotated_image_path, session_id = await service.process_group_photo_attendance(
         tenant_id=tenant_id,
+        user_id=current_user.id,
         file=file,
         similarity_threshold=similarity_threshold,
         confidence_threshold=confidence_threshold
@@ -238,6 +239,7 @@ async def mark_group_photo_attendance(
         message=f"Attendance marked for {len(logs)} employee(s).",
         status=status.HTTP_200_OK,
         data=GroupPhotoAttendanceResponse(
+            session_id=session_id,
             annotated_image_path=annotated_image_path,
             attendance_logs=attendance_logs
         )
