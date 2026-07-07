@@ -10,7 +10,7 @@ from shared.schemas.response import StandardResponse
 from shared.dependencies.auth import require_admin, require_viewer
 from modules.users.model import User
 from modules.employees.service import EmployeeService
-from modules.employees.schema import EmployeeResponse, EmployeeAttendanceResponse, EmployeeProcessVideosRequest, GroupPhotoAttendanceResponse
+from modules.employees.schema import EmployeeResponse, EmployeeAttendanceResponse, EmployeeProcessVideosRequest, GroupPhotoAttendanceResponse, UploadedPhotoResponse, EmployeePhotoProcessRequest
 from modules.peopleanalytics.schema import UploadedVideoResponse, PeopleAnalyticsSessionResponse
 
 
@@ -209,28 +209,26 @@ async def get_session_employee_attendance(
 
 
 @router.post(
-    "/attendance/photo",
+    "/attendance/photo/process",
     response_model=StandardResponse[GroupPhotoAttendanceResponse],
     status_code=status.HTTP_200_OK
 )
 async def mark_group_photo_attendance(
-    file: UploadFile = File(..., description="Group photo containing employees"),
-    similarity_threshold: float = Form(0.85, ge=0.5, le=1.0),
-    confidence_threshold: float = Form(0.3, ge=0.1, le=1.0),
+    request: EmployeePhotoProcessRequest,
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Detects employees in a group photo and logs check-in records day-wise.
+    Detects employees in an uploaded group photo and logs check-in records day-wise.
     """
     tenant_id = verify_tenant(current_user)
     service = EmployeeService(db)
     logs, annotated_image_path, session_id = await service.process_group_photo_attendance(
         tenant_id=tenant_id,
         user_id=current_user.id,
-        file=file,
-        similarity_threshold=similarity_threshold,
-        confidence_threshold=confidence_threshold
+        gallery_media_id=request.gallery_media_id,
+        similarity_threshold=request.similarity_threshold or 0.85,
+        confidence_threshold=request.confidence_threshold or 0.3
     )
     
     attendance_logs = [EmployeeAttendanceResponse.model_validate(l) for l in logs]
@@ -246,73 +244,46 @@ async def mark_group_photo_attendance(
     )
 
 
-@router.post(
-    "/attendance/video/upload",
-    response_model=StandardResponse[List[UploadedVideoResponse]],
-    status_code=status.HTTP_202_ACCEPTED
-)
-async def upload_attendance_videos(
-    files: List[UploadFile] = File(..., description="Select up to 10 video files to upload"),
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Uploads standalone attendance videos, saves them under storage/employee_attendance_inputs/{user_id}/, and registers them.
-    """
-    tenant_id = verify_tenant(current_user)
-    service = EmployeeService(db)
-    details = await service.upload_attendance_video_files(
-        tenant_id=tenant_id,
-        files=files,
-        user_id=current_user.id
-    )
-    return StandardResponse(
-        message=f"Successfully uploaded {len(details)} video file(s).",
-        status=status.HTTP_202_ACCEPTED,
-        data=[UploadedVideoResponse.model_validate(d) for d in details]
-    )
-
-
 @router.get(
-    "/attendance/video/uploads",
-    response_model=StandardResponse[List[UploadedVideoResponse]],
+    "/attendance/photo/uploads",
+    response_model=StandardResponse[List[UploadedPhotoResponse]],
     status_code=status.HTTP_200_OK
 )
-async def list_attendance_uploads(
+async def list_attendance_photo_uploads(
     current_user: User = Depends(require_viewer),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retrieves all video files uploaded by the active tenant for employee video attendance.
+    Retrieves all group photo files uploaded by the active tenant for employee photo attendance.
     """
     tenant_id = verify_tenant(current_user)
     service = EmployeeService(db)
-    videos = await service.get_uploaded_videos(tenant_id)
+    photos = await service.get_uploaded_photos(tenant_id)
     return StandardResponse(
-        message=f"Successfully retrieved {len(videos)} uploaded video(s).",
+        message=f"Successfully retrieved {len(photos)} uploaded photo(s).",
         status=status.HTTP_200_OK,
-        data=[UploadedVideoResponse.model_validate(v) for v in videos]
+        data=[UploadedPhotoResponse.model_validate(p) for p in photos]
     )
 
 
 @router.delete(
-    "/attendance/video/uploads/{video_id}",
+    "/attendance/photo/sessions/{session_id}",
     response_model=StandardResponse[None],
     status_code=status.HTTP_200_OK
 )
-async def delete_attendance_upload(
-    video_id: uuid.UUID,
-    current_user: User = Depends(require_viewer),
+async def delete_attendance_photo_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Deletes the uploaded video metadata and physical file (uploader or admin only).
+    Deletes the group photo attendance session run record.
     """
     tenant_id = verify_tenant(current_user)
     service = EmployeeService(db)
-    await service.delete_uploaded_video(video_id, tenant_id, current_user)
+    await service.delete_uploaded_photo(session_id, tenant_id)
     return StandardResponse(
-        message="Uploaded video and physical file deleted successfully.",
+        message="Attendance session run deleted successfully.",
         status=status.HTTP_200_OK,
         data=None
     )

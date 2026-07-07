@@ -71,9 +71,9 @@ class GalleryService:
         """Retrieve gallery media metadata."""
         return await self.repo.get_media_by_id(media_id, tenant_id)
 
-    async def get_all_media_sources(self, tenant_id: uuid.UUID) -> List[GalleryMedia]:
+    async def get_all_media_sources(self, tenant_id: uuid.UUID, media_type: Optional[str] = None) -> List[GalleryMedia]:
         """Retrieve all active gallery media sources for the tenant."""
-        return await self.repo.get_all_media(tenant_id)
+        return await self.repo.get_all_media(tenant_id, media_type)
 
     async def delete_media_source(self, media_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         """Soft deletes gallery media and physically deletes its file from disk."""

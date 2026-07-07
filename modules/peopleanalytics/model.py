@@ -31,6 +31,7 @@ class PeopleAnalyticsSession(BaseModel):
     video_path: Mapped[str] = mapped_column(String(512), nullable=False)
     output_video_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # 'pending' | 'processing' | 'completed' | 'failed'
+    session_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     
     # Coordinates of counting line
     line_start: Mapped[list[int] | None] = mapped_column(ARRAY(Integer), nullable=True)  # [x, y]

@@ -170,39 +170,51 @@ class EmployeeService:
         self,
         tenant_id: uuid.UUID,
         user_id: uuid.UUID,
-        file: UploadFile,
+        gallery_media_id: uuid.UUID,
         similarity_threshold: float = 0.85,
         confidence_threshold: float = 0.3
     ) -> Tuple[List[EmployeeAttendanceLog], str, uuid.UUID]:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         
-        session_id = uuid.uuid4()
+        from modules.gallery.repository import GalleryRepository
+        gallery_repo = GalleryRepository(self.db)
+        gallery_media = await gallery_repo.get_media_by_id(gallery_media_id, tenant_id)
+        if not gallery_media:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gallery media not found or unauthorized access."
+            )
+        if gallery_media.media_type != "photo":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected gallery media is not a photo."
+            )
+        if not os.path.exists(gallery_media.filepath):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Gallery media file does not exist on storage: '{gallery_media.filepath}'."
+            )
+
+        filepath = gallery_media.filepath
+        filename = gallery_media.filename
         
-        inputs_dir = os.path.join("storage", "employee_attendance_inputs", str(user_id))
+        session_id = uuid.uuid4()
         outputs_dir = os.path.join("storage", "employee_attendance_outputs", str(user_id))
-        os.makedirs(inputs_dir, exist_ok=True)
         os.makedirs(outputs_dir, exist_ok=True)
         
-        file_ext = os.path.splitext(file.filename or "")[1].lower()
-        if not file_ext:
-            file_ext = ".jpg"
-            
-        unique_name = f"group_photo_{session_id}{file_ext}"
-        filepath = os.path.join(inputs_dir, unique_name)
-        
-        content = await file.read()
-        with open(filepath, "wb") as f:
-            f.write(content)
+        with open(filepath, "rb") as f:
+            content = f.read()
 
         from modules.peopleanalytics.model import PeopleAnalyticsSession
         session = PeopleAnalyticsSession(
             id=session_id,
             tenant_id=tenant_id,
-            video_name=file.filename or "group_photo.jpg",
+            video_name=filename or "group_photo.jpg",
             video_path=filepath,
             similarity_threshold=similarity_threshold,
             confidence_threshold=confidence_threshold,
+            session_type="employees",
             status="pending"
         )
         self.db.add(session)
@@ -316,79 +328,7 @@ class EmployeeService:
         await self.db.commit()
         return list(res.scalars().all()), output_filepath, session.id
 
-    async def upload_attendance_video_files(
-        self,
-        tenant_id: uuid.UUID,
-        files: List[UploadFile],
-        user_id: uuid.UUID
-    ) -> List[object]:
-        if len(files) > 10:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="You can upload a maximum of 10 files in a single batch request."
-            )
 
-        uploaded_records = []
-        inputs_dir = os.path.join("storage", "employee_attendance_inputs", str(user_id))
-        os.makedirs(inputs_dir, exist_ok=True)
-
-        for file in files:
-            original_name = file.filename or ""
-            # Prevent duplicate uploads
-            existing_video = await self.repo.get_uploaded_video_by_name(tenant_id, original_name)
-            if existing_video:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{original_name}' has already been uploaded."
-                )
-
-            file_ext = os.path.splitext(original_name)[1].lower()
-            unique_name = f"{uuid.uuid4()}{file_ext}"
-            filepath = os.path.join(inputs_dir, unique_name)
-
-            content = await file.read()
-            with open(filepath, "wb") as f:
-                f.write(content)
-
-            uv = await self.repo.create_uploaded_video(
-                tenant_id=tenant_id,
-                original_name=original_name,
-                saved_path=filepath,
-                user_id=user_id
-            )
-            uploaded_records.append(uv)
-
-        await self.db.commit()
-        return uploaded_records
-
-    async def get_uploaded_videos(self, tenant_id: uuid.UUID) -> List[object]:
-        return await self.repo.get_uploaded_videos(tenant_id)
-
-    async def delete_uploaded_video(self, video_id: uuid.UUID, tenant_id: uuid.UUID, current_user: object) -> None:
-        video = await self.repo.get_uploaded_video_by_id(video_id, tenant_id)
-        if not video:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Uploaded video not found or unauthorized access."
-            )
-
-        is_owner = (video.user_id == current_user.id)
-        is_admin = getattr(current_user, "role", None) in ["admin", "superadmin"]
-
-        if not (is_owner or is_admin):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to delete this video."
-            )
-
-        video.is_delete = True
-        
-        if video.saved_path and os.path.exists(video.saved_path):
-            try:
-                os.remove(video.saved_path)
-            except Exception:
-                pass
-        await self.db.commit()
 
     async def create_and_start_attendance_sessions(
         self,
@@ -398,33 +338,36 @@ class EmployeeService:
         global_confidence_threshold: float = 0.3,
         user_id: uuid.UUID = None
     ) -> List[object]:
-        # Validate all files exist on disk and belong to this tenant's module
+        from modules.gallery.repository import GalleryRepository
+        gallery_repo = GalleryRepository(self.db)
+
+        resolved_items = []
         for item in videos:
-            filepath = item.video_path
-            if not os.path.exists(filepath):
+            gallery_media_id = item.gallery_media_id
+            gallery_media = await gallery_repo.get_media_by_id(gallery_media_id, tenant_id)
+            if not gallery_media:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Gallery media '{gallery_media_id}' not found or access denied."
+                )
+            if gallery_media.media_type != "video":
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{filepath}' does not exist on server storage."
+                    detail=f"Gallery media '{gallery_media_id}' is not a video file."
                 )
-            if "employee_attendance_inputs" not in filepath:
+            if not os.path.exists(gallery_media.filepath):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Video file '{filepath}' is not a valid Employee Attendance video."
+                    detail=f"Gallery media file does not exist on storage: '{gallery_media.filepath}'."
                 )
-            # Check tenant ownership in DB
-            existing_video = await self.repo.get_uploaded_video_by_path(tenant_id, filepath)
-            if not existing_video:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Unauthorized access or invalid video file: '{filepath}'"
-                )
+            resolved_items.append((item, gallery_media))
 
         sessions = []
         outputs_dir = os.path.join("storage", "employee_attendance_outputs", str(user_id))
         os.makedirs(outputs_dir, exist_ok=True)
 
-        for item in videos:
-            filepath = item.video_path
+        for item, gallery_media in resolved_items:
+            filepath = gallery_media.filepath
             similarity_threshold = getattr(item, "similarity_threshold", None)
             if similarity_threshold is None:
                 similarity_threshold = global_similarity_threshold
@@ -433,8 +376,7 @@ class EmployeeService:
             if confidence_threshold is None:
                 confidence_threshold = global_confidence_threshold
 
-
-            video_name = os.path.basename(filepath)
+            video_name = gallery_media.filename
             session = await self.repo.create_analytics_session(
                 tenant_id=tenant_id,
                 video_name=video_name,
@@ -473,5 +415,26 @@ class EmployeeService:
         return session
 
     async def list_attendance_sessions(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> List[object]:
-        return await self.repo.get_sessions(tenant_id, user_id)
+        return await self.repo.get_sessions(tenant_id)
+
+    async def get_uploaded_photos(self, tenant_id: uuid.UUID) -> List[object]:
+        return await self.repo.get_uploaded_photos(tenant_id)
+
+    async def delete_uploaded_photo(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+        res = await self.repo.delete_photo_session(session_id, tenant_id)
+        if not res:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Uploaded photo session not found or unauthorized access."
+            )
+        video_path, output_video_path = res
+        # Only delete the annotated output file, keeping the raw gallery media
+        if output_video_path and os.path.exists(output_video_path):
+            try:
+                os.remove(output_video_path)
+            except Exception:
+                pass
+        await self.db.commit()
+
+
 

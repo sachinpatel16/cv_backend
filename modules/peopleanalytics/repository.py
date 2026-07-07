@@ -387,6 +387,7 @@ class PeopleAnalyticsRepository:
             video_name=video_name,
             video_path=video_path,
             status="pending",
+            session_type="people_analytics",
             line_start=line_start,
             line_end=line_end,
             similarity_threshold=similarity_threshold,
@@ -400,7 +401,7 @@ class PeopleAnalyticsRepository:
         stmt = select(PeopleAnalyticsSession).where(
             PeopleAnalyticsSession.id == session_id,
             PeopleAnalyticsSession.tenant_id == tenant_id,
-            PeopleAnalyticsSession.video_path.like("%people_analytics_inputs%"),
+            PeopleAnalyticsSession.session_type == "people_analytics",
             PeopleAnalyticsSession.is_delete == False
         )
         result = await self.db.execute(stmt)
@@ -409,7 +410,7 @@ class PeopleAnalyticsRepository:
     async def get_all_sessions(self, tenant_id: uuid.UUID) -> List[PeopleAnalyticsSession]:
         stmt = select(PeopleAnalyticsSession).where(
             PeopleAnalyticsSession.tenant_id == tenant_id,
-            PeopleAnalyticsSession.video_path.like("%people_analytics_inputs%"),
+            PeopleAnalyticsSession.session_type == "people_analytics",
             PeopleAnalyticsSession.is_delete == False
         ).order_by(PeopleAnalyticsSession.created_at.desc())
         result = await self.db.execute(stmt)
@@ -440,11 +441,9 @@ class PeopleAnalyticsRepository:
             # Soft delete child logs
             stmt_occ = update(PersonOccurrence).where(PersonOccurrence.session_id == session_id).values(is_delete=True)
             stmt_crs = update(LineCrossingLog).where(LineCrossingLog.session_id == session_id).values(is_delete=True)
-            stmt_att = update(EmployeeAttendanceLog).where(EmployeeAttendanceLog.session_id == session_id).values(is_delete=True)
             stmt_det = update(EmployeeSessionDetection).where(EmployeeSessionDetection.session_id == session_id).values(is_delete=True)
             await self.db.execute(stmt_occ)
             await self.db.execute(stmt_crs)
-            await self.db.execute(stmt_att)
             await self.db.execute(stmt_det)
             await self.db.flush()
             return session.video_path, session.output_video_path, crop_paths
