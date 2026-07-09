@@ -47,6 +47,9 @@ class ObjectCountService:
 
         # Trigger background tracking Celery task
         try:
+            await self.repo.update_media_status(analysis.id, "processing")
+            await self.db.commit()
+
             from modules.objectcount.tasks import index_objectcount_task
             index_objectcount_task.delay(
                 str(analysis.id),

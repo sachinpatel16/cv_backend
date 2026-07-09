@@ -101,7 +101,7 @@ def index_objectcount_task(
             # Load weights using self-healing loader
             from shared.utils.model_loader import get_model_path
             try:
-                weights_path = get_model_path("objectcount", "yolo12m.pt")
+                weights_path = get_model_path("objectcount", "yolo26m.pt")
             except Exception:
                 try:
                     weights_path = get_model_path("objectcount", "yolo12n.pt")
