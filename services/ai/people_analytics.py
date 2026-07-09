@@ -113,20 +113,10 @@ class LineCrossingCounter:
             self.armed_side[object_id] = None  # Disarm
             
             if self.is_projection_on_segment(current_pos):
-                if self.is_vertical:
-                    # Left to Right: IN, Right to Left: OUT
-                    if prev_pos[0] <= current_pos[0]:
-                        self.in_count += 1
-                        return "in"
-                    else:
-                        self.out_count += 1
-                        return "out"
-                else:
-                    # Top to Bottom: IN, Bottom to Top: OUT
-                    if prev_pos[1] <= current_pos[1]:
-                        self.in_count += 1
-                        return "in"
-                    else:
-                        self.out_count += 1
-                        return "out"
+                if prev_side == -1 and current_side == 1:
+                    self.in_count += 1
+                    return "in"
+                elif prev_side == 1 and current_side == -1:
+                    self.out_count += 1
+                    return "out"
         return False

@@ -101,6 +101,8 @@ class PersonIdentity(BaseModel):
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     class_id: Mapped[int] = mapped_column(Integer, default=0) # 0 = person
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Relationships
     embeddings: Mapped[list["PersonEmbedding"]] = relationship(
@@ -181,6 +183,23 @@ class VisitorAttendanceLog(BaseModel):
 
     session: Mapped[Optional["PeopleAnalyticsSession"]] = relationship(back_populates="visitor_attendance")
     identity: Mapped["PersonIdentity"] = relationship(back_populates="attendance_logs")
+
+    @property
+    def photo_path(self) -> Optional[str]:
+        if self.identity and self.identity.occurrences:
+            for occ in self.identity.occurrences:
+                if occ.crop_path:
+                    return occ.crop_path
+        return None
+
+    @property
+    def first_name(self) -> Optional[str]:
+        return self.identity.first_name if self.identity else None
+
+    @property
+    def last_name(self) -> Optional[str]:
+        return self.identity.last_name if self.identity else None
+
 
 
 class EmployeeSessionDetection(BaseModel):

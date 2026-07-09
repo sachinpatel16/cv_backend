@@ -511,10 +511,14 @@ async def _process_video_job(
                             match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
                             if match_vis:
                                 visitor, sim = match_vis
+                                if visitor.first_name or visitor.last_name:
+                                    label_name = f"{visitor.first_name or ''} {visitor.last_name or ''}".strip()
+                                else:
+                                    label_name = f"Visitor #{str(visitor.id)[:4]}"
                                 track_info.update({
                                     "type": "visitor",
                                     "id": visitor.id,
-                                    "label": f"Visitor #{str(visitor.id)[:4]}",
+                                    "label": label_name,
                                     "color": (0, 180, 255)
                                 })
                                 unique_seen_identities.add(f"visitor:{visitor.id}")

@@ -117,7 +117,9 @@ class PeopleAnalyticsService:
                 identity_id=identity_id,
                 photo_path=next((occ.crop_path for occ in occs if occ.crop_path), None),
                 first_seen=min(occ.first_seen for occ in occs),
-                last_seen=max(occ.last_seen for occ in occs)
+                last_seen=max(occ.last_seen for occ in occs),
+                first_name=occs[0].identity.first_name if (occs and occs[0].identity) else None,
+                last_name=occs[0].identity.last_name if (occs and occs[0].identity) else None
             )
             for identity_id, occs in grouped_visitors.items()
         ]
@@ -182,10 +184,15 @@ class PeopleAnalyticsService:
 
         # Add visitors
         for occ in occurrences:
+            if occ.identity and (occ.identity.first_name or occ.identity.last_name):
+                visitor_name = f"{occ.identity.first_name or ''} {occ.identity.last_name or ''}".strip()
+            else:
+                visitor_name = f"Visitor #{str(occ.identity_id)[:4]}"
+                
             people.append(SessionDetectedPerson(
                 identity_id=occ.identity_id,
                 type="visitor",
-                name=f"Visitor #{str(occ.identity_id)[:4]}",
+                name=visitor_name,
                 photo_path=occ.crop_path,
                 first_seen=occ.first_seen,
                 last_seen=occ.last_seen
@@ -197,3 +204,148 @@ class PeopleAnalyticsService:
         self, tenant_id: uuid.UUID, start_date: object, end_date: object
     ):
         return await self.repo.get_visitor_attendance_by_date_range(tenant_id, start_date, end_date)
+
+    async def register_visitor_or_convert_to_employee(
+        self, tenant_id: uuid.UUID, data
+    ):
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from fastapi import HTTPException
+        from modules.peopleanalytics.model import PersonIdentity
+
+        # 1. Fetch PersonIdentity with relationships
+        stmt = (
+            select(PersonIdentity)
+            .options(
+                selectinload(PersonIdentity.occurrences),
+                selectinload(PersonIdentity.embeddings)
+            )
+            .where(
+                PersonIdentity.id == data.identity_id,
+                PersonIdentity.tenant_id == tenant_id,
+                PersonIdentity.is_delete == False
+            )
+        )
+        res = await self.db.execute(stmt)
+        identity = res.scalars().first()
+        if not identity:
+            raise HTTPException(
+                status_code=404,
+                detail="Visitor identity not found."
+            )
+
+        if data.registration_type == "visitor":
+            # Just update first_name & last_name
+            identity.first_name = data.first_name
+            identity.last_name = data.last_name
+            await self.db.commit()
+            return {"message": "Visitor registered successfully.", "type": "visitor"}
+
+        elif data.registration_type == "employee":
+            # 1. Verify employee code is unique under this tenant
+            from modules.employees.repository import EmployeeRepository
+            emp_repo = EmployeeRepository(self.db)
+            existing = await emp_repo.get_employee_by_code(data.employee_code, tenant_id)
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Employee code '{data.employee_code}' is already registered."
+                )
+
+            # 2. Get photo path (crop_path from first occurrence)
+            crop_path = None
+            for occ in identity.occurrences:
+                if occ.crop_path:
+                    crop_path = occ.crop_path
+                    break
+
+            if not crop_path:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No crop photo available for this visitor to register as employee."
+                )
+
+            # 3. Copy crop file to employee photos directory
+            import shutil
+            from modules.employees.service import EMPLOYEE_PHOTOS_DIR
+            os.makedirs(EMPLOYEE_PHOTOS_DIR, exist_ok=True)
+            
+            src_full_path = crop_path
+            new_filename = f"{uuid.uuid4()}.jpg"
+            dest_full_path = os.path.join(EMPLOYEE_PHOTOS_DIR, new_filename)
+            
+            try:
+                shutil.copy(src_full_path, dest_full_path)
+                emp_photo_path = dest_full_path.replace("\\", "/")
+            except Exception:
+                emp_photo_path = crop_path
+
+            # 4. Get embedding from PersonEmbedding
+            if not identity.embeddings:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No ReID embedding found for this visitor identity."
+                )
+            
+            target_embedding = identity.embeddings[0].embedding
+            bbox = identity.embeddings[0].bbox
+
+            # 5. Create new Employee
+            from modules.employees.model import Employee, EmployeeEmbedding
+            from modules.peopleanalytics.model import EmployeeAttendanceLog, VisitorAttendanceLog
+            
+            employee = Employee(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                employee_code=data.employee_code,
+                photo_path=emp_photo_path
+            )
+            self.db.add(employee)
+            await self.db.flush()
+
+            # Create Employee Embedding
+            emp_emb = EmployeeEmbedding(
+                employee_id=employee.id,
+                embedding=target_embedding,
+                bbox=bbox
+            )
+            self.db.add(emp_emb)
+
+            # 6. Migrate VisitorAttendanceLog records to EmployeeAttendanceLog
+            stmt_logs = select(VisitorAttendanceLog).where(
+                VisitorAttendanceLog.identity_id == identity.id,
+                VisitorAttendanceLog.is_delete == False
+            )
+            res_logs = await self.db.execute(stmt_logs)
+            v_logs = res_logs.scalars().all()
+            
+            for v_log in v_logs:
+                emp_log = EmployeeAttendanceLog(
+                    session_id=v_log.session_id,
+                    employee_id=employee.id,
+                    first_seen=v_log.first_seen,
+                    last_seen=v_log.last_seen,
+                    occurrence_count=v_log.occurrence_count,
+                    employee_entry_timestamp=v_log.visitor_entry_timestamp,
+                    employee_exit_timestamp=v_log.visitor_exit_timestamp,
+                    created_at=v_log.created_at,
+                    update_at=v_log.update_at
+                )
+                self.db.add(emp_log)
+                
+            # 7. Delete visitor data (cascades embeddings, occurrences, visitor attendance logs, crossing logs)
+            await self.db.delete(identity)
+            
+            await self.db.commit()
+            
+            # Invalidate employee embeddings cache for this tenant
+            from modules.employees.cache import invalidate_employee_embeddings_cache
+            await invalidate_employee_embeddings_cache(tenant_id)
+            
+            return {
+                "message": f"Visitor successfully registered as Employee ({data.employee_code}) and visitor logs converted.",
+                "type": "employee"
+            }
+
