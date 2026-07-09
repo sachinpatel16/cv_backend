@@ -295,6 +295,10 @@ class PeopleAnalyticsRepository:
 
         stmt = (
             select(VisitorAttendanceLog)
+            .options(
+                selectinload(VisitorAttendanceLog.identity)
+                .selectinload(PersonIdentity.occurrences)
+            )
             .join(PersonIdentity, VisitorAttendanceLog.identity_id == PersonIdentity.id)
             .where(
                 PersonIdentity.tenant_id == tenant_id,
@@ -453,6 +457,8 @@ class PeopleAnalyticsRepository:
         stmt = select(PersonOccurrence).where(
             PersonOccurrence.session_id == session_id,
             PersonOccurrence.is_delete == False
+        ).options(
+            selectinload(PersonOccurrence.identity)
         ).order_by(PersonOccurrence.first_seen.asc())
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
@@ -466,6 +472,8 @@ class PeopleAnalyticsRepository:
         stmt = select(PersonOccurrence).where(
             PersonOccurrence.session_id == session_id,
             PersonOccurrence.is_delete == False
+        ).options(
+            selectinload(PersonOccurrence.identity)
         )
         res = await self.db.execute(stmt)
         occurrences = list(res.scalars().all())

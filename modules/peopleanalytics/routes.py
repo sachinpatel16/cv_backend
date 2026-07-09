@@ -16,7 +16,8 @@ from modules.peopleanalytics.schema import (
     VisitorAnalyticsReport,
     ProcessVideosRequest,
     SessionDetectedPerson,
-    VisitorAttendanceResponse
+    VisitorAttendanceResponse,
+    RegisterVisitorRequest
 )
 
 router = APIRouter(prefix="/peopleanalytics", tags=["CCTV People Analytics & Attendance"])
@@ -243,3 +244,27 @@ async def get_visitor_attendance_by_date_range(
         status=status.HTTP_200_OK,
         data=[VisitorAttendanceResponse.model_validate(l) for l in logs]
     )
+
+
+@router.post(
+    "/visitors/register",
+    response_model=StandardResponse,
+    status_code=status.HTTP_200_OK
+)
+async def register_visitor_or_convert_to_employee(
+    data: RegisterVisitorRequest,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Registers a visitor (updates visitor details) or converts a visitor to an employee.
+    """
+    tenant_id = verify_tenant(current_user)
+    service = PeopleAnalyticsService(db)
+    result = await service.register_visitor_or_convert_to_employee(tenant_id, data)
+    return StandardResponse(
+        message=result["message"],
+        status=status.HTTP_200_OK,
+        data=result
+    )
+

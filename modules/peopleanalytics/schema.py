@@ -11,6 +11,8 @@ class FirstTimeVisitorDetail(BaseModel):
     photo_path: Optional[str] = None
     first_seen: float
     last_seen: float
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
     @computed_field
     @property
@@ -120,6 +122,9 @@ class VisitorAttendanceResponse(BaseModel):
     visitor_entry_timestamp: datetime = Field(..., description="Real-world check-in timestamp")
     visitor_exit_timestamp: datetime = Field(..., description="Real-world check-out timestamp")
     created_at: datetime
+    photo_path: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
     @computed_field
     @property
@@ -128,3 +133,12 @@ class VisitorAttendanceResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RegisterVisitorRequest(BaseModel):
+    identity_id: UUID
+    registration_type: str  # 'employee' | 'visitor'
+    first_name: str
+    last_name: str
+    employee_code: Optional[str] = None
+
