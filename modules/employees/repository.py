@@ -107,7 +107,7 @@ class EmployeeRepository:
         stmt = (
             select(EmployeeSessionDetection)
             .join(PeopleAnalyticsSession, EmployeeSessionDetection.session_id == PeopleAnalyticsSession.id)
-            .options(selectinload(EmployeeSessionDetection.employee))
+            .options(selectinload(EmployeeSessionDetection.employee), selectinload(EmployeeSessionDetection.session))
             .where(
                 EmployeeSessionDetection.session_id == session_id,
                 PeopleAnalyticsSession.tenant_id == tenant_id,

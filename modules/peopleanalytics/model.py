@@ -219,10 +219,22 @@ class EmployeeSessionDetection(BaseModel):
 
     @property
     def employee_entry_timestamp(self) -> datetime:
+        from datetime import timedelta
+        try:
+            if self.session and self.session.created_at:
+                return self.session.created_at + timedelta(seconds=self.first_seen)
+        except Exception:
+            pass
         return self.created_at
 
     @property
     def employee_exit_timestamp(self) -> datetime:
+        from datetime import timedelta
+        try:
+            if self.session and self.session.created_at:
+                return self.session.created_at + timedelta(seconds=self.last_seen)
+        except Exception:
+            pass
         return self.update_at
 
 
