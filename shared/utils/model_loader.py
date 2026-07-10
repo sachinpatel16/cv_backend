@@ -15,6 +15,7 @@ MODEL_URLS = {
     "yolov8n-pose.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n-pose.pt",
     "yolo12n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo12n.pt",
     "yolo12m.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo12m.pt",
+    "yolo26n.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt",
     "yolo26m.pt": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m.pt",
 }
 
