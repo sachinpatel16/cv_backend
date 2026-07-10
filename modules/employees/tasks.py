@@ -208,6 +208,9 @@ def process_employee_attendance_video_task(
                 # 3. Log employee attendance day-wise
                 for tracker_id, track in active_tracks.items():
                     if track["id"] is not None and track["type"] == "employee":
+                        from datetime import timedelta
+                        entry_time = session.created_at + timedelta(seconds=track["first_seen"])
+                        exit_time = session.created_at + timedelta(seconds=track["last_seen"])
                         await emp_repo.log_employee_attendance(
                             tenant_id=session.tenant_id,
                             employee_id=track["id"],
@@ -215,8 +218,8 @@ def process_employee_attendance_video_task(
                             first_seen_sec=track["first_seen"],
                             last_seen_sec=track["last_seen"],
                             occurrence_increment=track["occurrences"],
-                            entry_time=track.get("first_seen_timestamp"),
-                            exit_time=track.get("last_seen_timestamp")
+                            entry_time=entry_time,
+                            exit_time=exit_time
                         )
 
                 # Update session table details

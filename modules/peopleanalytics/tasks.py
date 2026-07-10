@@ -622,6 +622,10 @@ async def _process_video_job(
             continue
         if track.get("short_crossing", False):
             continue
+
+        entry_time = session.created_at + timedelta(seconds=track["first_seen"])
+        exit_time = session.created_at + timedelta(seconds=track["last_seen"])
+
         if track["type"] == "employee":
             completed_attendance.append({
                 "session_id": session.id,
@@ -629,8 +633,8 @@ async def _process_video_job(
                 "first_seen": track["first_seen"],
                 "last_seen": track["last_seen"],
                 "occurrence_count": track["occurrences"],
-                "entry_time": track.get("first_seen_timestamp"),
-                "exit_time": track.get("last_seen_timestamp")
+                "entry_time": entry_time,
+                "exit_time": exit_time
             })
         else:
             crop_path = None
@@ -657,8 +661,8 @@ async def _process_video_job(
                 "first_seen_sec": track["first_seen"],
                 "last_seen_sec": track["last_seen"],
                 "occurrence_increment": track["occurrences"],
-                "entry_time": track.get("first_seen_timestamp"),
-                "exit_time": track.get("last_seen_timestamp")
+                "entry_time": entry_time,
+                "exit_time": exit_time
             })
 
     # Bulk insert occurrences, attendance, and crossings to database
