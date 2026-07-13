@@ -130,7 +130,7 @@ curl -X DELETE "http://localhost:8000/api/v1/peopleanalytics/uploads/e555b489-b3
 ---
 
 ### 4. Process Batch Sessions
-Creates processing sessions and schedules celery background workers to analyze selected uploaded videos. You can customize coordinates for the entry/exit line and detection thresholds.
+Creates processing sessions and schedules celery background workers to analyze selected uploaded videos. You can customize coordinates for the entry/exit line, detection thresholds, and selectively toggle computer vision modules.
 
 * **URL:** `/peopleanalytics/process`
 * **Method:** `POST`
@@ -138,15 +138,41 @@ Creates processing sessions and schedules celery background workers to analyze s
 * **Role Allowed:** `admin`
 * **Request JSON Body Fields:**
   * `videos`: `Array[Object]` (Required. Array of videos to process)
-    * `video_path`: `string` (Required. Path returned by upload API e.g. `"storage/people_analytics_inputs/..."`)
+    * `gallery_media_id`: `string` (Required. UUID of the gallery media item to process)
     * `line_start`: `[integer, integer]` (Optional. Coordinates `[x, y]` of line start for this specific video)
     * `line_end`: `[integer, integer]` (Optional. Coordinates `[x, y]` of line end for this specific video)
     * `similarity_threshold`: `float` (Optional. Local similarity matching override. Default: `0.85`)
     * `confidence_threshold`: `float` (Optional. Local YOLO confidence threshold override. Default: `0.3`)
+    * `track_employees`: `boolean` (Optional. Local override to track employee attendance)
+    * `register_new_visitors`: `boolean` (Optional. Local override to register unrecognized faces as new visitors)
+    * `track_repeat_visitors`: `boolean` (Optional. Local override to recognize repeat visitors)
+    * `line_crossing_analysis`: `boolean` (Optional. Local override to track line crossings)
+    * `track_occupancy`: `boolean` (Optional. Local override to track occupancy)
   * `line_start`: `[integer, integer]` (Optional. Global fallback start coordinates `[x, y]`)
   * `line_end`: `[integer, integer]` (Optional. Global fallback end coordinates `[x, y]`)
   * `similarity_threshold`: `float` (Optional. Global fallback similarity threshold. Default: `0.85`)
   * `confidence_threshold`: `float` (Optional. Global fallback confidence threshold. Default: `0.3`)
+  * `track_employees`: `boolean` (Optional. Global fallback default to track employee attendance. Default: `true`)
+  * `register_new_visitors`: `boolean` (Optional. Global fallback default to register new visitors. Default: `true`)
+  * `track_repeat_visitors`: `boolean` (Optional. Global fallback default to track repeat visitors. Default: `true`)
+  * `line_crossing_analysis`: `boolean` (Optional. Global fallback default to run line crossing. Default: `true`)
+  * `track_occupancy`: `boolean` (Optional. Global fallback default to track occupancy. Default: `true`)
+
+#### UI Execution Parameters & Frontend Component Logic
+
+Developers can display these 5 checkboxes/toggles in the UI when initiating video processing. Here is how the selection changes what results are saved and how the UI should conditionally display dashboard widgets when viewing the completed session:
+
+| Toggle Switch / Parameter | Recommended UI Label | Description | Dependent UI Metrics & Components |
+| :--- | :--- | :--- | :--- |
+| `track_employees` | **Track Employee Attendance** | Runs face recognition against employee database to log check-ins. | Show/Hide the **Employee Attendance list** in results. If disabled, employee metrics show as `N/A`. |
+| `register_new_visitors` | **Register New Visitors** | Saves unrecognized faces as new visitors in database. | Show/Hide the **First-Time Visitors** count and photo crop feed. If disabled, new visitors aren't registered. |
+| `track_repeat_visitors` | **Recognize Repeat Visitors** | Compares faces to historical visitor list to trace repeat visits. | Show/Hide **Repeat Visitor Rate** card and repeat counts. |
+| `line_crossing_analysis` | **Line Crossing Analysis** | Counts people crossing the line (Entry/Exit counts). | Show/Hide **Entry Count** (In) and **Exit Count** (Out) stats cards. Draws crossing line overlays on video canvas. |
+| `track_occupancy` | **Track Occupancy Timeline** | Tracks person count over time to build timeline graph. | Show/Hide the **Live Occupancy Timeline Line Chart** and **Peak/Average Occupancy** stats cards. |
+
+> **Note on Dwell Time & Unique People Counts:**
+> - **Unique People Count** and individual **Dwell Times** depend entirely on face recognition. If `track_employees`, `register_new_visitors`, and `track_repeat_visitors` are ALL disabled, the Unique People counter widget will display as `N/A`, and individual dwell time timelines will not be shown.
+> - **Line Crossing Event Logs:** Detailed per-person crossing log tables can only populate if face recognition is enabled (since logs require an identity ID). If face recognition is disabled but line crossing is enabled, only overall Entry/Exit counts are saved; the detailed per-person timeline table should be hidden in the UI.
 
 #### Example Request (cURL):
 ```bash
@@ -156,13 +182,23 @@ curl -X POST "http://localhost:8000/api/v1/peopleanalytics/process" \
   -d '{
     "videos": [
       {
-        "video_path": "storage/people_analytics_inputs/e555b489-b357-470d-abd9-33648e6aec50/office_cctv.mp4",
+        "gallery_media_id": "e555b489-b357-470d-abd9-33648e6aec50",
         "line_start": [22, 517],
-        "line_end": [1237, 698]
+        "line_end": [1237, 698],
+        "track_employees": true,
+        "register_new_visitors": false,
+        "track_repeat_visitors": false,
+        "line_crossing_analysis": true,
+        "track_occupancy": true
       }
     ],
     "similarity_threshold": 0.85,
-    "confidence_threshold": 0.3
+    "confidence_threshold": 0.3,
+    "track_employees": true,
+    "register_new_visitors": true,
+    "track_repeat_visitors": true,
+    "line_crossing_analysis": true,
+    "track_occupancy": true
   }'
 ```
 
@@ -183,6 +219,11 @@ curl -X POST "http://localhost:8000/api/v1/peopleanalytics/process" \
       "line_end": [1237, 698],
       "similarity_threshold": 0.85,
       "confidence_threshold": 0.3,
+      "track_employees": true,
+      "register_new_visitors": false,
+      "track_repeat_visitors": false,
+      "line_crossing_analysis": true,
+      "track_occupancy": true,
       "unique_person_count": null,
       "total_person_count": null,
       "first_time_visitor_count": null,

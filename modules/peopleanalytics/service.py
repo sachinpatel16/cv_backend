@@ -29,6 +29,11 @@ class PeopleAnalyticsService:
         global_line_end: Optional[List[int]] = None,
         global_similarity_threshold: float = 0.85,
         global_confidence_threshold: float = 0.3,
+        global_track_employees: bool = True,
+        global_register_new_visitors: bool = True,
+        global_track_repeat_visitors: bool = True,
+        global_line_crossing_analysis: bool = True,
+        global_track_occupancy: bool = True,
         user_id: Optional[uuid.UUID] = None
     ) -> List[PeopleAnalyticsSession]:
         # Validate all gallery media IDs and resolve file paths
@@ -56,6 +61,7 @@ class PeopleAnalyticsService:
                 )
             resolved_items.append((item, gallery_media))
 
+         # Track active runs
         sessions = []
 
         for item, gallery_media in resolved_items:
@@ -66,6 +72,11 @@ class PeopleAnalyticsService:
             line_end = item.line_end if item.line_end is not None else global_line_end
             similarity_threshold = item.similarity_threshold if item.similarity_threshold is not None else global_similarity_threshold
             confidence_threshold = item.confidence_threshold if item.confidence_threshold is not None else global_confidence_threshold
+            track_employees = item.track_employees if item.track_employees is not None else global_track_employees
+            register_new_visitors = item.register_new_visitors if item.register_new_visitors is not None else global_register_new_visitors
+            track_repeat_visitors = item.track_repeat_visitors if item.track_repeat_visitors is not None else global_track_repeat_visitors
+            line_crossing_analysis = item.line_crossing_analysis if item.line_crossing_analysis is not None else global_line_crossing_analysis
+            track_occupancy = item.track_occupancy if item.track_occupancy is not None else global_track_occupancy
 
             video_name = gallery_media.filename
             # Register database session
@@ -76,7 +87,12 @@ class PeopleAnalyticsService:
                 line_start=line_start,
                 line_end=line_end,
                 similarity_threshold=similarity_threshold,
-                confidence_threshold=confidence_threshold
+                confidence_threshold=confidence_threshold,
+                track_employees=track_employees,
+                register_new_visitors=register_new_visitors,
+                track_repeat_visitors=track_repeat_visitors,
+                line_crossing_analysis=line_crossing_analysis,
+                track_occupancy=track_occupancy
             )
             await self.db.commit()
             await self.db.refresh(session)
@@ -90,7 +106,12 @@ class PeopleAnalyticsService:
                 line_end,
                 similarity_threshold,
                 confidence_threshold,
-                str(user_id) if user_id else None
+                str(user_id) if user_id else None,
+                track_employees,
+                register_new_visitors,
+                track_repeat_visitors,
+                line_crossing_analysis,
+                track_occupancy
             )
 
             sessions.append(session)

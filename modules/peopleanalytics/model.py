@@ -40,6 +40,13 @@ class PeopleAnalyticsSession(BaseModel):
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.85)
     confidence_threshold: Mapped[float] = mapped_column(Float, default=0.3)
     
+    # Parameter based execution flags
+    track_employees: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    register_new_visitors: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    track_repeat_visitors: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    line_crossing_analysis: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    track_occupancy: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    
     # Aggregated results reports
     unique_person_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_person_count: Mapped[int | None] = mapped_column(Integer, nullable=True)

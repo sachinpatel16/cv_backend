@@ -61,6 +61,11 @@ async def process_batch_sessions(
         global_line_end=request.line_end,
         global_similarity_threshold=request.similarity_threshold,
         global_confidence_threshold=request.confidence_threshold,
+        global_track_employees=request.track_employees,
+        global_register_new_visitors=request.register_new_visitors,
+        global_track_repeat_visitors=request.track_repeat_visitors,
+        global_line_crossing_analysis=request.line_crossing_analysis,
+        global_track_occupancy=request.track_occupancy,
         user_id=current_user.id
     )
     return StandardResponse(

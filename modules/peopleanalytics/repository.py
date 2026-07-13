@@ -384,7 +384,12 @@ class PeopleAnalyticsRepository:
         line_start: Optional[list[int]] = None,
         line_end: Optional[list[int]] = None,
         similarity_threshold: float = 0.82,
-        confidence_threshold: float = 0.3
+        confidence_threshold: float = 0.3,
+        track_employees: bool = True,
+        register_new_visitors: bool = True,
+        track_repeat_visitors: bool = True,
+        line_crossing_analysis: bool = True,
+        track_occupancy: bool = True
     ) -> PeopleAnalyticsSession:
         session = PeopleAnalyticsSession(
             tenant_id=tenant_id,
@@ -395,7 +400,12 @@ class PeopleAnalyticsRepository:
             line_start=line_start,
             line_end=line_end,
             similarity_threshold=similarity_threshold,
-            confidence_threshold=confidence_threshold
+            confidence_threshold=confidence_threshold,
+            track_employees=track_employees,
+            register_new_visitors=register_new_visitors,
+            track_repeat_visitors=track_repeat_visitors,
+            line_crossing_analysis=line_crossing_analysis,
+            track_occupancy=track_occupancy
         )
         self.db.add(session)
         await self.db.flush()
