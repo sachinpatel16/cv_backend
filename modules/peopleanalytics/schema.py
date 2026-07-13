@@ -38,6 +38,12 @@ class PeopleAnalyticsSessionResponse(BaseModel):
     similarity_threshold: float
     confidence_threshold: float
     
+    track_employees: bool = True
+    register_new_visitors: bool = True
+    track_repeat_visitors: bool = True
+    line_crossing_analysis: bool = True
+    track_occupancy: bool = True
+    
     unique_person_count: Optional[int] = None
     total_person_count: Optional[int] = None
     first_time_visitor_count: Optional[int] = None
@@ -84,6 +90,11 @@ class VideoProcessItem(BaseModel):
     line_end: Optional[List[int]] = Field(None, description="Coordinates [x, y] of counting line end")
     similarity_threshold: Optional[float] = Field(None, ge=0.5, le=1.0, description="Optional per-video similarity threshold")
     confidence_threshold: Optional[float] = Field(None, ge=0.1, le=1.0, description="Optional per-video confidence threshold")
+    track_employees: Optional[bool] = Field(None, description="Optional per-video toggle to track employees")
+    register_new_visitors: Optional[bool] = Field(None, description="Optional per-video toggle to register new visitors")
+    track_repeat_visitors: Optional[bool] = Field(None, description="Optional per-video toggle to track repeat visitors")
+    line_crossing_analysis: Optional[bool] = Field(None, description="Optional per-video toggle for line crossing analysis")
+    track_occupancy: Optional[bool] = Field(None, description="Optional per-video toggle to track occupancy")
 
 
 
@@ -93,6 +104,11 @@ class ProcessVideosRequest(BaseModel):
     line_end: Optional[List[int]] = Field(None, description="Global fallback coordinates [x, y] of counting line end")
     similarity_threshold: float = Field(0.85, ge=0.5, le=1.0, description="Global fallback ReID cosine similarity threshold")
     confidence_threshold: float = Field(0.3, ge=0.1, le=1.0, description="Global fallback YOLO confidence threshold")
+    track_employees: bool = Field(True, description="Global fallback toggle to track employees")
+    register_new_visitors: bool = Field(True, description="Global fallback toggle to register new visitors")
+    track_repeat_visitors: bool = Field(True, description="Global fallback toggle to track repeat visitors")
+    line_crossing_analysis: bool = Field(True, description="Global fallback toggle for line crossing analysis")
+    track_occupancy: bool = Field(True, description="Global fallback toggle to track occupancy")
 
 
 class SessionDetectedPerson(BaseModel):

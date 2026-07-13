@@ -41,7 +41,12 @@ def process_people_analytics_task(
     line_end: list[int] | None = None,
     similarity_threshold: float = 0.85,
     confidence_threshold: float = 0.3,
-    user_id_str: str | None = None
+    user_id_str: str | None = None,
+    track_employees: bool = True,
+    register_new_visitors: bool = True,
+    track_repeat_visitors: bool = True,
+    line_crossing_analysis: bool = True,
+    track_occupancy: bool = True
 ):
     """
     Celery background task for full People Analytics Suite.
@@ -87,11 +92,38 @@ def process_people_analytics_task(
 
                 if is_image:
                     await _process_image_job(
-                        db, repo, session, filepath, model, employee_cache, similarity_threshold, confidence_threshold, user_id_str
+                        db=db,
+                        repo=repo,
+                        session=session,
+                        filepath=filepath,
+                        model=model,
+                        employee_cache=employee_cache,
+                        similarity_threshold=similarity_threshold,
+                        confidence_threshold=confidence_threshold,
+                        user_id_str=user_id_str,
+                        track_employees=track_employees,
+                        register_new_visitors=register_new_visitors,
+                        track_repeat_visitors=track_repeat_visitors,
+                        track_occupancy=track_occupancy
                     )
                 else:
                     await _process_video_job(
-                        db, repo, session, filepath, model, employee_cache, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str
+                        db=db,
+                        repo=repo,
+                        session=session,
+                        filepath=filepath,
+                        model=model,
+                        employee_cache=employee_cache,
+                        line_start=line_start,
+                        line_end=line_end,
+                        similarity_threshold=similarity_threshold,
+                        confidence_threshold=confidence_threshold,
+                        user_id_str=user_id_str,
+                        track_employees=track_employees,
+                        register_new_visitors=register_new_visitors,
+                        track_repeat_visitors=track_repeat_visitors,
+                        line_crossing_analysis=line_crossing_analysis,
+                        track_occupancy=track_occupancy
                     )
 
             except Exception as e:
@@ -104,7 +136,11 @@ def process_people_analytics_task(
 
 
 async def _process_image_job(
-    db, repo, session, filepath, model, employee_cache, similarity_threshold, confidence_threshold, user_id_str=None
+    db, repo, session, filepath, model, employee_cache, similarity_threshold, confidence_threshold, user_id_str=None,
+    track_employees: bool = True,
+    register_new_visitors: bool = True,
+    track_repeat_visitors: bool = True,
+    track_occupancy: bool = True
 ):
     # Process static image
     img = cv2.imread(filepath)
@@ -121,8 +157,9 @@ async def _process_image_job(
     first_time_visitor_count = 0
     total_person_count = len(boxes)
 
-    # Dictionary to keep unique tracked identities in this image
+    is_face_analysis_needed = track_employees or register_new_visitors or track_repeat_visitors
     seen_identities = set()
+
     for idx, box in enumerate(boxes):
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         # Validate coordinates
@@ -131,60 +168,64 @@ async def _process_image_job(
 
         # Find matching face inside the localized person crop
         matched_face = None
-        crop = img[y1:y2, x1:x2]
-        if crop is not None and crop.size > 0:
-            _, encoded_crop = cv2.imencode(".jpg", crop)
-            crop_bytes = encoded_crop.tobytes()
-            try:
-                faces = face_rec_service.extract_faces(crop_bytes)
-            except Exception:
-                faces = []
+        if is_face_analysis_needed:
+            crop = img[y1:y2, x1:x2]
+            if crop is not None and crop.size > 0:
+                _, encoded_crop = cv2.imencode(".jpg", crop)
+                crop_bytes = encoded_crop.tobytes()
+                try:
+                    faces = face_rec_service.extract_faces(crop_bytes)
+                except Exception:
+                    faces = []
 
-            # Apply the 4 face visibility/quality filters
-            valid_faces = []
-            for face in faces:
-                fx1, fy1, fx2, fy2 = map(int, face["bbox"])
-                # 1. Size filter
-                if (fx2 - fx1) < 45 or (fy2 - fy1) < 45:
-                    continue
-                # 2. Confidence filter
-                if face.get("det_score", 0.0) < 0.70:
-                    continue
-                # 3. Keypoints containment filter
-                kps = face.get("kps")
-                is_full_face = True
-                if kps:
-                    margin_x = int((fx2 - fx1) * 0.05)
-                    margin_y = int((fy2 - fy1) * 0.05)
-                    limit_x1 = fx1 - margin_x
-                    limit_x2 = fx2 + margin_x
-                    limit_y1 = fy1 - margin_y
-                    limit_y2 = fy2 + margin_y
-                    for kp in kps:
-                        kp_x, kp_y = kp
-                        if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
-                            is_full_face = False
-                            break
-                if not is_full_face:
-                    continue
-                # 4. Occlusion filter
-                if is_face_occluded(crop, kps):
-                    continue
-                valid_faces.append(face)
+                # Apply the 4 face visibility/quality filters
+                valid_faces = []
+                for face in faces:
+                    fx1, fy1, fx2, fy2 = map(int, face["bbox"])
+                    # 1. Size filter
+                    if (fx2 - fx1) < 45 or (fy2 - fy1) < 45:
+                        continue
+                    # 2. Confidence filter
+                    if face.get("det_score", 0.0) < 0.70:
+                        continue
+                    # 3. Keypoints containment filter
+                    kps = face.get("kps")
+                    is_full_face = True
+                    if kps:
+                        margin_x = int((fx2 - fx1) * 0.05)
+                        margin_y = int((fy2 - fy1) * 0.05)
+                        limit_x1 = fx1 - margin_x
+                        limit_x2 = fx2 + margin_x
+                        limit_y1 = fy1 - margin_y
+                        limit_y2 = fy2 + margin_y
+                        for kp in kps:
+                            kp_x, kp_y = kp
+                            if not (limit_x1 <= kp_x <= limit_x2 and limit_y1 <= kp_y <= limit_y2):
+                                is_full_face = False
+                                break
+                    if not is_full_face:
+                        continue
+                    # 4. Occlusion filter
+                    if is_face_occluded(crop, kps):
+                        continue
+                    valid_faces.append(face)
 
-            if valid_faces:
-                matched_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
+                if valid_faces:
+                    matched_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
 
         identity_id = None
-        label = "Visitor"
+        label = "Person" if not is_face_analysis_needed else "Visitor"
         color = (200, 200, 200) # Gray for face-less/anonymous visitors
 
-        if matched_face is not None:
+        if is_face_analysis_needed and matched_face is not None:
             face_embedding = np.array(matched_face["embedding"], dtype=np.float32)
             mapped_threshold = map_similarity_threshold(similarity_threshold)
 
             # 1. Check Employees cache
-            match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+            match_emp = None
+            if track_employees:
+                match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+            
             if match_emp:
                 employee, sim = match_emp
                 identity_id = employee.id
@@ -201,8 +242,11 @@ async def _process_image_job(
                     occurrence_count=1
                 )
             else:
-                # 2. Check Face Visitors (class_id=1)
-                match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
+                # 2. Check Face Visitors
+                match_vis = None
+                if track_repeat_visitors:
+                    match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
+                
                 if match_vis:
                     visitor, sim = match_vis
                     identity_id = visitor.id
@@ -215,7 +259,7 @@ async def _process_image_job(
                         bbox=matched_face["bbox"],
                         timestamp=0.0
                     )
-                else:
+                elif register_new_visitors:
                     # 3. Create new Face Visitor
                     visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
                     await repo.create_person_embedding(
@@ -230,32 +274,33 @@ async def _process_image_job(
                     seen_identities.add(f"visitor:{visitor.id}")
                     first_time_visitor_count += 1
 
-                # Log visitor occurrence
-                crop_path = None
-                crop_img = img[y1:y2, x1:x2]
-                if crop_img is not None and crop_img.size > 0:
-                    crop_filename = f"{uuid.uuid4()}.jpg"
-                    user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
-                    os.makedirs(user_crops_dir, exist_ok=True)
-                    crop_path = os.path.join(user_crops_dir, crop_filename)
-                    cv2.imwrite(crop_path, crop_img)
+                # Log visitor occurrence if identity registered
+                if identity_id:
+                    crop_path = None
+                    crop_img = img[y1:y2, x1:x2]
+                    if crop_img is not None and crop_img.size > 0:
+                        crop_filename = f"{uuid.uuid4()}.jpg"
+                        user_crops_dir = os.path.join(VISITOR_CROPS_DIR, user_id_str) if user_id_str else VISITOR_CROPS_DIR
+                        os.makedirs(user_crops_dir, exist_ok=True)
+                        crop_path = os.path.join(user_crops_dir, crop_filename)
+                        cv2.imwrite(crop_path, crop_img)
 
-                await repo.create_person_occurrence(
-                    session_id=session.id,
-                    identity_id=visitor.id,
-                    tracker_id=idx,
-                    first_seen=0.0,
-                    last_seen=0.0,
-                    crop_path=crop_path
-                )
-                # Log visitor daily attendance
-                await repo.log_visitor_attendance(
-                    session_id=session.id,
-                    identity_id=visitor.id,
-                    first_seen_sec=0.0,
-                    last_seen_sec=0.0,
-                    occurrence_increment=1
-                )
+                    await repo.create_person_occurrence(
+                        session_id=session.id,
+                        identity_id=identity_id,
+                        tracker_id=idx,
+                        first_seen=0.0,
+                        last_seen=0.0,
+                        crop_path=crop_path
+                    )
+                    # Log visitor daily attendance
+                    await repo.log_visitor_attendance(
+                        session_id=session.id,
+                        identity_id=identity_id,
+                        first_seen_sec=0.0,
+                        last_seen_sec=0.0,
+                        occurrence_increment=1
+                    )
         
         # Draw overlays
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
@@ -264,17 +309,22 @@ async def _process_image_job(
     unique_person_count = len(seen_identities)
 
     # Draw HUD on static image
-    hud_w, hud_h = 320, 140
-    if w_orig > hud_w + 20 and h_orig > hud_h + 20:
-        sub_img = img[10:10+hud_h, 10:10+hud_w]
-        rect = np.zeros(sub_img.shape, dtype=np.uint8) + 20  # dark background
-        blended = cv2.addWeighted(sub_img, 0.4, rect, 0.6, 0)
-        img[10:10+hud_h, 10:10+hud_w] = blended
+    if track_occupancy:
+        hud_w, hud_h = 320, 140
+        if w_orig > hud_w + 20 and h_orig > hud_h + 20:
+            sub_img = img[10:10+hud_h, 10:10+hud_w]
+            rect = np.zeros(sub_img.shape, dtype=np.uint8) + 20  # dark background
+            blended = cv2.addWeighted(sub_img, 0.4, rect, 0.6, 0)
+            img[10:10+hud_h, 10:10+hud_w] = blended
 
-        cv2.putText(img, "PEOPLE ANALYTICS SUMMARY", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.putText(img, f"Total Detected: {total_person_count}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(img, f"Unique People: {unique_person_count}", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(img, f"New Visitors: {first_time_visitor_count}", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(img, "PEOPLE ANALYTICS SUMMARY", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.putText(img, f"Total Detected: {total_person_count}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            if is_face_analysis_needed:
+                cv2.putText(img, f"Unique People: {unique_person_count}", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(img, f"New Visitors: {first_time_visitor_count}", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            else:
+                cv2.putText(img, "Unique People: N/A", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(img, "New Visitors: N/A", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
     # Save output annotated image
     output_filename = f"{uuid.uuid4()}_annotated.jpg"
@@ -284,26 +334,31 @@ async def _process_image_job(
     cv2.imwrite(output_path, img)
 
     # Generate flat occupancy timeline for static image (just 1 frame)
-    occupancy_timeline = [{"time_sec": 0, "occupancy": total_person_count}]
+    occupancy_timeline = [{"time_sec": 0, "occupancy": total_person_count}] if track_occupancy else None
 
     # Update DB Session results
     await repo.update_session_results(
         session_id=session.id,
-        unique_person_count=unique_person_count,
-        total_person_count=total_person_count,
-        first_time_visitor_count=first_time_visitor_count,
-        peak_occupancy=total_person_count,
-        average_occupancy=float(total_person_count),
+        unique_person_count=unique_person_count if is_face_analysis_needed else None,
+        total_person_count=total_person_count if track_occupancy else None,
+        first_time_visitor_count=first_time_visitor_count if is_face_analysis_needed else None,
+        peak_occupancy=total_person_count if track_occupancy else None,
+        average_occupancy=float(total_person_count) if track_occupancy else None,
         entry_count=None,
         exit_count=None,
-        occupancy_timeline=occupancy_timeline,
+        occupancy_timeline=occupancy_timeline if track_occupancy else None,
         output_video_path=output_path
     )
     await db.commit()
 
 
 async def _process_video_job(
-    db, repo, session, filepath, model, employee_cache, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str=None
+    db, repo, session, filepath, model, employee_cache, line_start, line_end, similarity_threshold, confidence_threshold, user_id_str=None,
+    track_employees: bool = True,
+    register_new_visitors: bool = True,
+    track_repeat_visitors: bool = True,
+    line_crossing_analysis: bool = True,
+    track_occupancy: bool = True
 ):
     cap = cv2.VideoCapture(filepath)
     if not cap.isOpened():
@@ -328,7 +383,7 @@ async def _process_video_job(
         lost_track_buffer=int(fps * 10)  # Keep lost tracks in memory for up to 10 seconds (aligns with employee module)
     )
     line_counter = None
-    if line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
+    if line_crossing_analysis and line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
         line_counter = LineCrossingCounter(line_start, line_end)
 
     # Tracking states
@@ -369,6 +424,8 @@ async def _process_video_job(
         occupancy_history.append({"time_sec": round(timestamp_sec, 2), "occupancy": current_occupancy})
         if current_occupancy > peak_occupancy_so_far:
             peak_occupancy_so_far = current_occupancy
+
+        is_face_analysis_needed = track_employees or register_new_visitors or track_repeat_visitors
 
         if detections.tracker_id is not None:
             for xyxy, class_id, tracker_id in zip(detections.xyxy, detections.class_id, detections.tracker_id):
@@ -420,8 +477,8 @@ async def _process_video_job(
                 
                 # Check for face inside the localized person crop
                 matched_face = None
-                # Run face detection periodically if the track is not an employee (unmatched or currently visitor)
-                if (not track_info["matched"] or track_info["type"] == "visitor") and frame_idx % frame_step == 0:
+                # Run face detection periodically if face analysis is needed and track is not fully employee-matched yet
+                if is_face_analysis_needed and (not track_info["matched"] or track_info["type"] == "visitor") and frame_idx % frame_step == 0:
                     crop = frame[y1:y2, x1:x2]
                     if crop is not None and crop.size > 0:
                         _, encoded_img = cv2.imencode(".jpg", crop)
@@ -467,13 +524,16 @@ async def _process_video_job(
                             # Take the largest face detected in the crop
                             matched_face = max(valid_faces, key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]))
 
-                # Match if a face was detected inside the person's bounding box and they aren't fully employee-matched yet
-                if (not track_info["matched"] or track_info["type"] == "visitor") and matched_face is not None:
+                # Match if face analysis is needed, face is found, and person is not employee-matched
+                if is_face_analysis_needed and (not track_info["matched"] or track_info["type"] == "visitor") and matched_face is not None:
                     face_embedding = np.array(matched_face["embedding"], dtype=np.float32)
                     mapped_threshold = map_similarity_threshold(similarity_threshold)
 
                     # 1. Match against registered employees
-                    match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+                    match_emp = None
+                    if track_employees:
+                        match_emp = find_best_match_in_cache(face_embedding, employee_cache, mapped_threshold)
+                    
                     if match_emp:
                         employee, sim = match_emp
                         
@@ -498,17 +558,18 @@ async def _process_video_job(
                             "id": employee.id,
                             "label": f"{employee.first_name} (EMP)",
                             "color": (0, 255, 0),
-                            "matched": True
+                             "matched": True
                         })
                         unique_seen_identities.add(f"employee:{employee.id}")
                     else:
-                        # 2. Match against generic visitors (class_id=1 for face ReID)
-                        # ONLY if they don't already have a visitor ID associated!
+                        # 2. Match against generic visitors
                         if track_info["type"] == "visitor" and track_info["id"] is not None:
-                            # Already matched as visitor, keep existing assignment
                             pass
                         else:
-                            match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
+                            match_vis = None
+                            if track_repeat_visitors:
+                                match_vis = await repo.find_similar_visitor(session.tenant_id, face_embedding.tolist(), mapped_threshold, class_id=1)
+                            
                             if match_vis:
                                 visitor, sim = match_vis
                                 if visitor.first_name or visitor.last_name:
@@ -523,7 +584,7 @@ async def _process_video_job(
                                 })
                                 unique_seen_identities.add(f"visitor:{visitor.id}")
                                 await repo.create_person_embedding(identity_id=visitor.id, embedding=face_embedding.tolist(), bbox=matched_face["bbox"], timestamp=timestamp_sec)
-                            else:
+                            elif register_new_visitors:
                                 # 3. Create new Face Visitor
                                 visitor = await repo.create_person_identity(session.tenant_id, class_id=1)
                                 await repo.create_person_embedding(identity_id=visitor.id, embedding=face_embedding.tolist(), bbox=matched_face["bbox"], timestamp=timestamp_sec)
@@ -549,8 +610,12 @@ async def _process_video_job(
 
                 # Draw overlay annotation
                 track_info = active_tracks[tracker_id]
+                label_text = track_info["label"]
+                if not is_face_analysis_needed:
+                    label_text = f"Person #{tracker_id}"
+                    track_info["color"] = (255, 255, 0)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), track_info["color"], 2)
-                cv2.putText(frame, track_info["label"], (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, track_info["color"], 2)
+                cv2.putText(frame, label_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, track_info["color"], 2)
 
         # Draw HUD on video frame
         hud_w, hud_h = 320, 220
@@ -561,17 +626,30 @@ async def _process_video_job(
             frame[10:10+hud_h, 10:10+hud_w] = blended
 
             cv2.putText(frame, "PEOPLE ANALYTICS HUD", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.putText(frame, f"Live Occupancy: {current_occupancy}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, f"Unique People: {len(unique_seen_identities)}", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            if track_occupancy:
+                cv2.putText(frame, f"Live Occupancy: {current_occupancy}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, f"Peak Occupancy: {peak_occupancy_so_far}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            else:
+                cv2.putText(frame, "Live Occupancy: N/A", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, "Peak Occupancy: N/A", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            if is_face_analysis_needed:
+                cv2.putText(frame, f"Unique People: {len(unique_seen_identities)}", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, f"New Visitors: {first_time_visitors_count}", (20, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            else:
+                cv2.putText(frame, "Unique People: N/A", (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(frame, "New Visitors: N/A", (20, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
             cv2.putText(frame, f"Total Tracks: {len(active_tracks)}", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, f"New Visitors: {first_time_visitors_count}", (20, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame, f"Peak Occupancy: {peak_occupancy_so_far}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            if line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
+            if line_counter:
                 cv2.putText(frame, f"Entry Count (In): {sum(1 for c in track_crossings if c['direction'] == 'in')}", (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 cv2.putText(frame, f"Exit Count (Out): {sum(1 for c in track_crossings if c['direction'] == 'out')}", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            else:
+                cv2.putText(frame, "Entry Count: N/A", (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
+                cv2.putText(frame, "Exit Count: N/A", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
 
         # Draw the line coordinates
-        if line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
+        if line_counter and line_start and line_end and len(line_start) == 2 and len(line_end) == 2 and line_start != line_end:
             cv2.line(frame, tuple(line_start), tuple(line_end), (255, 0, 255), 2)
 
         output_writer.write(frame)
@@ -607,6 +685,7 @@ async def _process_video_job(
 
     for c in valid_crossings:
         track_info = active_tracks.get(c["tracker_id"])
+        # Only log crossings in DB if they are associated with a resolved face identity
         if track_info and track_info["type"] == "visitor" and track_info["id"] is not None:
             completed_crossings.append({
                 "session_id": session.id,
@@ -679,7 +758,9 @@ async def _process_video_job(
     occupancies = [o["occupancy"] for o in occupancy_history]
     peak_occupancy = max(occupancies) if occupancies else 0
     average_occupancy = np.mean(occupancies) if occupancies else 0.0
-    total_person_count = len(completed_occurrences) + len(completed_attendance)
+    
+    # If face recognition is disabled, use active tracks count as total people count proxy
+    total_person_count = len(completed_occurrences) + len(completed_attendance) if is_face_analysis_needed else len(active_tracks)
 
     # Downsample occupancy_timeline to 1-second intervals
     downsampled_timeline = []
@@ -696,14 +777,14 @@ async def _process_video_job(
 
     await repo.update_session_results(
         session_id=session.id,
-        unique_person_count=len(unique_seen_identities),
-        total_person_count=total_person_count,
-        first_time_visitor_count=first_time_visitors_count,
-        peak_occupancy=peak_occupancy,
-        average_occupancy=round(float(average_occupancy), 2),
+        unique_person_count=len(unique_seen_identities) if is_face_analysis_needed else None,
+        total_person_count=total_person_count if (track_occupancy or is_face_analysis_needed) else None,
+        first_time_visitor_count=first_time_visitors_count if is_face_analysis_needed else None,
+        peak_occupancy=peak_occupancy if track_occupancy else None,
+        average_occupancy=round(float(average_occupancy), 2) if track_occupancy else None,
         entry_count=entry_count,
         exit_count=exit_count,
-        occupancy_timeline=downsampled_timeline,
+        occupancy_timeline=downsampled_timeline if track_occupancy else None,
         output_video_path=output_path
     )
     await db.commit()

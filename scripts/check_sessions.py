@@ -35,6 +35,7 @@ async def main():
             print(f"  Unique People: {s.unique_person_count}")
             print(f"  Total People: {s.total_person_count}")
             print(f"  Peak Occupancy: {s.peak_occupancy}")
+            print(f"  Flags: EMP={s.track_employees}, NEW_VIS={s.register_new_visitors}, REP_VIS={s.track_repeat_visitors}, LINE={s.line_crossing_analysis}, OCC={s.track_occupancy}")
             print(f"  Created At: {s.created_at}")
             print(f"  Completed At: {s.completed_at}")
             print("-" * 40)
