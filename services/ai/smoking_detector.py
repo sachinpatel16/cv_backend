@@ -326,20 +326,28 @@ class SmokingDetector:
         person_model_path: str = MODEL_PATHS["person"],
         cig_model_path:    str | None = MODEL_PATHS["cigarette"],
     ):
-        print(f"[SmokingDetector] Loading person detector from: {person_model_path}")
-        self.person_model = YOLO(person_model_path)
+        self.person_model_path = person_model_path
+        self.cig_model_path = cig_model_path
+        self.person_model = None
+        self.cig_model = None
+        self.smoother = SmokingSmoother(window=SMOKE_WINDOW)
+        self._initialized = False
 
-        self.cig_model: YOLO | None = None
-        if cig_model_path and Path(cig_model_path).exists():
-            print(f"[SmokingDetector] Loading cigarette detector from: {cig_model_path}")
-            self.cig_model = YOLO(cig_model_path)
+    def _lazy_init(self):
+        if self._initialized:
+            return
+        print(f"[SmokingDetector] Loading person detector from: {self.person_model_path}")
+        self.person_model = YOLO(self.person_model_path)
+
+        if self.cig_model_path and Path(self.cig_model_path).exists():
+            print(f"[SmokingDetector] Loading cigarette detector from: {self.cig_model_path}")
+            self.cig_model = YOLO(self.cig_model_path)
         else:
             print(
                 "[SmokingDetector] No cigarette model found — using colour/shape heuristics.\n"
                 "                  Supply a YOLOv8 model via MODEL_PATHS['cigarette'] for better accuracy."
             )
-
-        self.smoother = SmokingSmoother(window=SMOKE_WINDOW)
+        self._initialized = True
 
     # ── cigarette detection (heuristic fallback) ──────────────────────────────
 
@@ -386,7 +394,7 @@ class SmokingDetector:
     def _analyse_frame(
         self, frame: np.ndarray, timestamp: float
     ) -> tuple[np.ndarray, list[dict]]:
-
+        self._lazy_init()
         person_results  = self.person_model(frame, verbose=False, classes=[PERSON_CLASS])
         frame_records:   list[dict]                   = []
         person_statuses: list[tuple[int, str, dict]]  = []
@@ -594,6 +602,9 @@ class SmokingDetector:
             print("[SmokingDetector] Done.")
 
         return all_results
+
+
+smoking_detector = SmokingDetector()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

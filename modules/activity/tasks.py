@@ -1,8 +1,11 @@
 import os
 import uuid
 import cv2
+import logging
 import numpy as np
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from workers.celery import celery_app
 from database.session import SessionLocal
@@ -23,14 +26,13 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
     Celery task to run activity and theft detection on an uploaded media file in the background.
     """
     media_id = uuid.UUID(media_id_str)
+    logger.info(f"Starting activity detection task for media_id={media_id_str}, interval={interval}")
 
     async def run():
         async with SessionLocal() as db:
             repo = ActivityRepository(db)
             
             # 1. Fetch media
-            media = await repo.get_activity_media_by_id(media_id, media_id) # bypass tenant scope by using media_id as tenant_id in Celery
-            # Wait, Celery bypasses tenant checks by loading directly, let's fetch by simple ID:
             stmt = select(GalleryMedia).where(
                 GalleryMedia.id == media_id,
                 GalleryMedia.is_delete == False
@@ -38,11 +40,13 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
             res = await db.execute(stmt)
             media = res.scalars().first()
             if not media:
+                logger.error(f"GalleryMedia record not found or deleted for media_id={media_id_str}")
                 return
 
             # Update status to processing
             media.status = "processing"
             await db.commit()
+            logger.info(f"Media {media_id_str} status updated to 'processing'")
 
             # 2. Fetch config
             stmt_cfg = select(ActivityConfig).where(
@@ -76,6 +80,9 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                 detect_sleeping = config.detect_sleeping
                 detect_walking = config.detect_walking
                 selected_activities = config.selected_activities
+                logger.info(f"Loaded ActivityConfig from database: detect_fall={detect_fall}, detect_aggression={detect_aggression}, detect_intrusion={detect_intrusion}, detect_loitering={detect_loitering}")
+            else:
+                logger.warning(f"No ActivityConfig record found for media_id={media_id_str}. Falling back to default configuration.")
 
             output_filepath = None
             if media.media_type == "video":
@@ -86,6 +93,7 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                 output_filepath = os.path.join(
                     "storage", "activity_media", f"output_{media.id}.jpg"
                 )
+            logger.info(f"Resolved output file path: {output_filepath}")
 
             try:
                 # 3. Process media
@@ -263,14 +271,15 @@ def process_activity_media_task(media_id_str: str, interval: float = 0.033):
                     try:
                         videoFormatChanger(output_filepath, formats="h264", overwrite_input=True)
                     except Exception as e:
-                        print(f"Video transcoding failed (falling back to raw mp4v): {e}")
+                        logger.warning(f"Video transcoding failed (falling back to raw mp4v) for media_id={media_id_str}: {e}")
 
                 media.processed_filepath = output_filepath
                 media.status = "completed"
                 await db.commit()
+                logger.info(f"Activity detection task finished successfully for media_id={media_id_str}")
 
             except Exception as e:
-                print(f"Error executing activity detection task for media {media.id}: {e}")
+                logger.exception(f"Exception occurred in activity detection task for media_id={media_id_str}: {e}")
                 media.status = "failed"
                 await db.commit()
 

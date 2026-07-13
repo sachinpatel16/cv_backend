@@ -2,6 +2,7 @@ import os
 import uuid
 import cv2
 import torch
+import logging
 # Prevent OpenCV multi-threading conflicts with Celery fork
 cv2.setNumThreads(0)
 # Prevent PyTorch thread conflicts
@@ -11,6 +12,8 @@ import numpy as np
 from sqlalchemy import select
 from ultralytics import YOLO
 import supervision as sv
+
+logger = logging.getLogger(__name__)
 
 from workers.celery import celery_app
 from database.session import SessionLocal
@@ -34,6 +37,7 @@ def process_employee_attendance_video_task(
     Celery background task for standalone employee video attendance tracking.
     """
     session_id = uuid.UUID(session_id_str)
+    logger.info(f"Starting standalone employee attendance task for session_id={session_id_str}, filepath={filepath}")
 
     async def run():
         async with SessionLocal() as db:
@@ -45,11 +49,13 @@ def process_employee_attendance_video_task(
             res = await db.execute(stmt)
             session = res.scalars().first()
             if not session:
+                logger.error(f"Employee Attendance session not found or deleted for session_id={session_id_str}")
                 return
 
             # Update session status to processing
             session.status = "processing"
             await db.commit()
+            logger.info(f"Session {session_id_str} status updated to 'processing'")
 
             try:
                 # 2. Open input video
@@ -60,6 +66,8 @@ def process_employee_attendance_video_task(
                 orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                logger.info(f"Opened video: resolution={orig_width}x{orig_height}, fps={fps}, total_frames={total_frames}")
 
                 # Initialize video writer
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -70,14 +78,28 @@ def process_employee_attendance_video_task(
                 # Initialize Redis client if needed
                 from database.redis import get_redis_client, init_redis
                 if get_redis_client() is None:
+                    logger.info("Initializing Redis cache client...")
                     await init_redis()
                 # Load employee embeddings from cache (or DB)
+                logger.info(f"Loading employee embeddings cache for tenant_id={session.tenant_id}...")
                 employee_cache = await get_cached_employee_embeddings(db, session.tenant_id)
+                logger.info(f"Loaded {len(employee_cache)} employee embeddings from cache")
 
                 from configs.base import settings
                 from shared.utils.model_loader import get_model_path
                 model_filename = os.path.basename(settings.YOLO_MODEL)
-                weights_path = get_model_path("attendance", model_filename)
+                try:
+                    weights_path = get_model_path("attendance", model_filename)
+                    logger.info(f"Loaded configured YOLO weights '{model_filename}' from: {weights_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to load configured weights '{model_filename}': {e}. Trying fallback 'yolo12n.pt'...")
+                    try:
+                        weights_path = get_model_path("attendance", "yolo12n.pt")
+                        logger.info(f"Fallback successful. Using 'yolo12n.pt' weights from: {weights_path}")
+                    except Exception as e2:
+                        weights_path = get_model_path("attendance", "yolov8n.pt")
+                        logger.info(f"Fallback successful. Using 'yolov8n.pt' weights from: {weights_path}")
+                
                 model = YOLO(weights_path)
                 tracker = sv.ByteTrack(
                     frame_rate=int(fps),
@@ -90,6 +112,7 @@ def process_employee_attendance_video_task(
                 frame_idx = 0
                 unique_employees = set()
 
+                logger.info("Starting video frame processing loop...")
                 while cap.isOpened():
                     ret, frame = cap.read()
                     if not ret or frame is None:
@@ -97,6 +120,9 @@ def process_employee_attendance_video_task(
 
                     timestamp_sec = frame_idx / fps
                     frame_idx += 1
+
+                    if frame_idx % 100 == 0:
+                        logger.info(f"Session {session.id}: Processed {frame_idx}/{total_frames} frames ({int(frame_idx/total_frames*100)}% done)")
 
                     # Run person-only inference
                     results = model(
@@ -203,7 +229,7 @@ def process_employee_attendance_video_task(
                 try:
                     videoFormatChanger(output_path, formats="h264", overwrite_input=True)
                 except Exception as e:
-                    print(f"Video transcoding failed (falling back to raw mp4v): {e}")
+                    logger.warning(f"Video transcoding failed (falling back to raw mp4v) for session_id={session_id_str}: {e}")
 
                 # 3. Log employee attendance day-wise
                 for tracker_id, track in active_tracks.items():
@@ -230,10 +256,10 @@ def process_employee_attendance_video_task(
                 session.unique_person_count = len(unique_employees)
                 session.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                logger.info(f"Employee attendance task finished successfully for session_id={session_id_str}")
 
             except Exception as e:
-                import traceback
-                traceback.print_exc()
+                logger.exception(f"Exception occurred in employee attendance task run loop for session_id={session_id_str}: {e}")
                 session.status = "failed"
                 await db.commit()
 
