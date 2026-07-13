@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.smokingdetect.repository import SmokingDetectRepository
 from modules.smokingdetect.model import SmokingSession, SmokingEvent
 from modules.gallery.repository import GalleryRepository
+from services.ai.smoking_detector import smoking_detector
 
 SMOKING_DETECTION_DIR = os.path.join("storage", "smoking_detection")
 os.makedirs(SMOKING_DETECTION_DIR, exist_ok=True)
